@@ -88,6 +88,9 @@ async fn main() -> anyhow::Result<()> {
     // Router
     let app = Router::new()
         .route("/api/health", get(handlers::health::health))
+        .route("/api/leaderboard", get(handlers::read_api::leaderboard))
+        .route("/api/matches", get(handlers::read_api::list_matches))
+        .route("/api/matches/:id", get(handlers::read_api::get_match))
         .with_state(app_state.clone())
         .route(
             shared::AgentSocket::PATH,

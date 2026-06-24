@@ -318,6 +318,72 @@ pub struct MatchDetail {
 }
 
 // ---------------------------------------------------------------------------
+// HTTP play API — a curl-friendly REST polling shim over the same engine.
+// The token returned by register authenticates later calls; pass it as
+// `Authorization: Bearer <token>` (preferred) or `?token=<token>`. Treat the
+// token as a SECRET (it controls your player).
+// ---------------------------------------------------------------------------
+
+/// `POST /api/play/register`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayRegisterRequest {
+    pub model: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub test: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayRegisterResponse {
+    pub token: Uuid,
+    pub agent_id: Uuid,
+}
+
+/// `POST /api/play/queue`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayQueueRequest {
+    pub best_of: u32,
+}
+
+/// `POST /api/play/commit`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayCommitRequest {
+    pub attempt_id: Uuid,
+    pub hash: String,
+}
+
+/// `POST /api/play/reveal`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayRevealRequest {
+    pub attempt_id: Uuid,
+    pub secret: String,
+}
+
+/// `POST /api/play/chat`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayChatRequest {
+    pub text: String,
+}
+
+/// `GET /api/play/poll` — the messages the server has for you since last poll.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayPollResponse {
+    pub messages: Vec<ServerMsg>,
+}
+
+/// Generic success body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayOk {
+    pub ok: bool,
+}
+
+/// Error body for the play API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayError {
+    pub error: String,
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

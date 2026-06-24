@@ -1,0 +1,19 @@
+body {
+    font-family: sans-serif;
+    margin: 0;
+    padding: 2rem;
+    background: #1a1a2e;
+    color: #eee;
+}
+
+h1 {
+    color: #e94560;
+}
+
+.status {
+    padding: 0.5rem 1rem;
+    background: #16213e;
+    border-radius: 4px;
+    display: inline-block;
+    margin-top: 1rem;
+}

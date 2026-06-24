@@ -9,7 +9,7 @@
 //! (preferred) or `?token=<token>`. The token is a secret — it controls the
 //! player.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -52,8 +52,8 @@ pub struct HttpSession {
     /// Buffered server→player messages, drained by `poll`.
     outbox: Arc<Mutex<VecDeque<ServerMsg>>>,
     notify: Arc<Notify>,
-    committed: HashSet<Uuid>,
-    revealed: HashSet<Uuid>,
+    committed: HashMap<Uuid, String>,
+    revealed: HashMap<Uuid, String>,
     queued: bool,
     last_seen: Instant,
 }
@@ -177,8 +177,8 @@ pub async fn register(
             out_tx: Some(out_tx),
             outbox,
             notify,
-            committed: HashSet::new(),
-            revealed: HashSet::new(),
+            committed: HashMap::new(),
+            revealed: HashMap::new(),
             queued: false,
             last_seen: Instant::now(),
         },
@@ -256,20 +256,25 @@ pub async fn commit(
             .get_mut(&token)
             .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unknown token"))?;
         s.last_seen = Instant::now();
-        // Idempotent: a retried commit for the same attempt is a no-op.
-        if !s.committed.insert(req.attempt_id) {
-            return Ok(Json(PlayOk { ok: true }));
+        // Idempotent only for an exact retry. A different hash for the same
+        // attempt means the client is trying to change a locked commitment.
+        if let Some(existing_hash) = s.committed.get(&req.attempt_id) {
+            if existing_hash == &req.hash {
+                return Ok(Json(PlayOk { ok: true }));
+            }
+            return Err(err(
+                StatusCode::CONFLICT,
+                "conflicting commit for attempt_id",
+            ));
         }
+        s.in_tx
+            .send(ClientMsg::Commit {
+                attempt_id: req.attempt_id,
+                hash: req.hash.clone(),
+            })
+            .map_err(|_| err(StatusCode::BAD_REQUEST, "match not active"))?;
+        s.committed.insert(req.attempt_id, req.hash);
     }
-    forward(
-        &app,
-        token,
-        ClientMsg::Commit {
-            attempt_id: req.attempt_id,
-            hash: req.hash,
-        },
-    )
-    .await?;
     Ok(Json(PlayOk { ok: true }))
 }
 
@@ -287,19 +292,23 @@ pub async fn reveal(
             .get_mut(&token)
             .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unknown token"))?;
         s.last_seen = Instant::now();
-        if !s.revealed.insert(req.attempt_id) {
-            return Ok(Json(PlayOk { ok: true }));
+        if let Some(existing_secret) = s.revealed.get(&req.attempt_id) {
+            if existing_secret == &req.secret {
+                return Ok(Json(PlayOk { ok: true }));
+            }
+            return Err(err(
+                StatusCode::CONFLICT,
+                "conflicting reveal for attempt_id",
+            ));
         }
+        s.in_tx
+            .send(ClientMsg::Reveal {
+                attempt_id: req.attempt_id,
+                secret: req.secret.clone(),
+            })
+            .map_err(|_| err(StatusCode::BAD_REQUEST, "match not active"))?;
+        s.revealed.insert(req.attempt_id, req.secret);
     }
-    forward(
-        &app,
-        token,
-        ClientMsg::Reveal {
-            attempt_id: req.attempt_id,
-            secret: req.secret,
-        },
-    )
-    .await?;
     Ok(Json(PlayOk { ok: true }))
 }
 

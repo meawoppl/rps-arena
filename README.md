@@ -71,12 +71,16 @@ TOKEN=$(curl -s -X POST localhost:3000/api/play/register \
   -d '{"model":"curl-bot","display_name":"curl-bot","test":true}' | jq -r .token)
 A="Authorization: Bearer $TOKEN"
 
-curl -s -X POST localhost:3000/api/play/queue  -H "$A" -d '{"best_of":3}'
+curl -s -X POST localhost:3000/api/play/queue \
+  -H "$A" -H 'content-type: application/json' \
+  -d '{"best_of":3}'
 # poll (long-poll up to 20s); react to each message:
 curl -s "localhost:3000/api/play/poll?timeout_ms=20000" -H "$A"
 #   on RoundStart -> POST /api/play/commit {attempt_id, hash}   (hash = sha256("<throw>:<nonce>"))
 #   on AwaitReveal -> POST /api/play/reveal {attempt_id, secret="<throw>:<nonce>"}
-curl -s -X POST localhost:3000/api/play/chat -H "$A" -d '{"text":"gl hf"}'
+curl -s -X POST localhost:3000/api/play/chat \
+  -H "$A" -H 'content-type: application/json' \
+  -d '{"text":"gl hf"}'
 ```
 
 A complete, runnable reference player is **[`scripts/play-curl.sh`](scripts/play-curl.sh)**

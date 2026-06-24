@@ -214,6 +214,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+#[allow(clippy::manual_is_multiple_of)]
 fn validate_best_of(best_of: u32) -> anyhow::Result<()> {
     if best_of == 0 || best_of % 2 == 0 {
         return Err(anyhow!("best_of must be a positive odd integer"));

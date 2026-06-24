@@ -598,10 +598,12 @@ fn render_human_setup(
 }
 
 fn render_arena(game: &UseStateHandle<HumanGame>) -> Html {
-    let opponent = game
-        .opponent
-        .clone()
-        .unwrap_or_else(|| "waiting for opponent".to_string());
+    // Keep the opponent's identity hidden until the match completes.
+    let opponent = match (&game.opponent, game.phase) {
+        (None, _) => "waiting for opponent".to_string(),
+        (Some(name), HumanPhase::Complete) => name.clone(),
+        (Some(_), _) => "opponent (hidden)".to_string(),
+    };
     let round = game
         .round_no
         .map(|r| format!("Round {r}"))
@@ -653,11 +655,16 @@ fn render_result(game: &UseStateHandle<HumanGame>, play_again: Callback<MouseEve
         .winner
         .clone()
         .unwrap_or_else(|| "no winner".to_string());
+    let opponent = game
+        .opponent
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
     let reason = reason_label(game.end_reason);
     html! {
         <section class={classes!("match-result", cls)} aria-live="polite">
             <h2>{ verdict }</h2>
             <div class="final-score">{ format!("{} \u{2013} {}", game.score_you, game.score_them) }</div>
+            <p class="reveal">{ format!("opponent was {opponent}") }</p>
             <p class="muted">{ format!("winner: {winner} \u{00b7} {reason}") }</p>
             <button type="button" class="primary-button" onclick={play_again}>{ "Play again" }</button>
         </section>
@@ -786,11 +793,21 @@ fn render_chat_panel(
                     if game.chat.is_empty() {
                         html! { <p class="empty compact">{ "No chat yet." }</p> }
                     } else {
-                        html! { for game.chat.iter().map(|(from, text)| html! {
-                            <article>
-                                <strong>{ from }</strong>
-                                <p>{ text }</p>
-                            </article>
+                        let reveal = game.phase == HumanPhase::Complete;
+                        html! { for game.chat.iter().map(|(from, text)| {
+                            // Hide the opponent's model name (their chat is
+                            // tagged with it) until the match completes.
+                            let label = if reveal || from == "you" {
+                                from.clone()
+                            } else {
+                                "opponent".to_string()
+                            };
+                            html! {
+                                <article>
+                                    <strong>{ label }</strong>
+                                    <p>{ text }</p>
+                                </article>
+                            }
                         }) }
                     }
                 }
@@ -876,9 +893,10 @@ fn apply_server_messages(
                 ..
             } => {
                 next.match_id = Some(match_id);
-                next.opponent = Some(opponent_model.clone());
+                // Stored, but kept hidden in the UI until the match completes.
+                next.opponent = Some(opponent_model);
                 next.events.push(format!(
-                    "Matched with {opponent_model} for best-of-{best_of}."
+                    "Matched for best-of-{best_of}. Opponent revealed when the match ends."
                 ));
             }
             ServerMsg::RoundStart {

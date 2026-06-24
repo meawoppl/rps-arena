@@ -682,3 +682,13 @@ tbody tr:last-child td {
     font-weight: 700;
     letter-spacing: 2px;
 }
+
+.match-result .reveal {
+    margin: 0;
+    font-size: 15px;
+    color: #e6edf3;
+}
+
+.match-result .reveal::before {
+    content: "\1F575  ";
+}

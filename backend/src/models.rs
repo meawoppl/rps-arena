@@ -1,7 +1,6 @@
 //! Diesel models for the match engine (write path). Read-side Queryable models
 //! for the leaderboard/transcript are added alongside the read API.
 
-use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use uuid::Uuid;
 
@@ -57,18 +56,4 @@ pub struct NewChatMessage {
     pub round_no: Option<i32>,
     pub from_model: String,
     pub text: String,
-}
-
-/// Read model for a finished/in-progress match header.
-#[derive(Debug, Queryable, Selectable)]
-#[diesel(table_name = matches)]
-pub struct MatchRow {
-    pub id: Uuid,
-    pub best_of: i32,
-    pub status: String,
-    pub winner_model: Option<String>,
-    pub end_reason: Option<String>,
-    pub is_test: bool,
-    pub started_at: DateTime<Utc>,
-    pub ended_at: Option<DateTime<Utc>>,
 }

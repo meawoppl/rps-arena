@@ -1,10 +1,14 @@
 mod db;
+mod db_ops;
 mod embedded_assets;
+mod game;
 mod handlers;
 mod models;
+mod rules;
 mod schema;
 
 use crate::db::DbPool;
+use crate::game::Matchmaker;
 use axum::{routing::get, Router};
 use clap::Parser;
 use std::{env, sync::Arc};
@@ -25,6 +29,7 @@ struct Args {
 pub struct AppState {
     pub dev_mode: bool,
     pub db_pool: DbPool,
+    pub matchmaker: Matchmaker,
 }
 
 #[tokio::main]
@@ -67,9 +72,11 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    let matchmaker = Matchmaker::new(pool.clone());
     let app_state = Arc::new(AppState {
         dev_mode: args.dev_mode,
         db_pool: pool,
+        matchmaker,
     });
 
     // CORS
@@ -81,8 +88,11 @@ async fn main() -> anyhow::Result<()> {
     // Router
     let app = Router::new()
         .route("/api/health", get(handlers::health::health))
-        .with_state(app_state)
-        .route(shared::AgentSocket::PATH, handlers::websocket::handler())
+        .with_state(app_state.clone())
+        .route(
+            shared::AgentSocket::PATH,
+            handlers::websocket::handler(app_state.clone()),
+        )
         .fallback(axum::routing::get(embedded_assets::serve_embedded_frontend))
         .layer(cors);
 

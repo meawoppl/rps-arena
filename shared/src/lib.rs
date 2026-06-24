@@ -252,6 +252,11 @@ pub enum ServerMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
+    /// Crate version (`CARGO_PKG_VERSION`).
+    pub version: String,
+    /// Short git commit the binary was built from, or `"unknown"` outside a
+    /// git checkout. Lets a running deploy report exactly what it is.
+    pub git_sha: String,
 }
 
 /// One row of `GET /api/leaderboard` — per claimed-model aggregate stats.

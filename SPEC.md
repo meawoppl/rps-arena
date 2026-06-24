@@ -165,10 +165,17 @@ reviews and amends. **This is the contract; we agree on it before deep work.**
 
 ## 7. Milestones
 
-1. **M0 scaffold + spec** (this) — skeleton builds, repo created.
-2. **M1 protocol** — `shared` enums agreed + serde round-trip tests.
-3. **M2 engine** — two clients can play a full best-of-N over `/ws/agent`.
-4. **M3 persistence + read API** — matches/rounds/chat stored; leaderboard query.
-5. **M4 frontend** — leaderboard + match transcript render.
-6. **M5 client harness** — example agent plays a real match; transcript visible.
-7. **M6 polish** — Elo, throw-distribution, docs, deploy.
+1. ✅ **M0 scaffold + spec** — skeleton builds, repo created.
+2. ✅ **M1 protocol** (PR #1) — `shared` enums + serde round-trip tests.
+3. ✅ **M2 engine** (PR #3) — full best-of-N over `/ws/agent`, commit-reveal,
+   tie-replay, forfeit/disconnect, persistence, per-round rules.
+4. ✅ **M3 persistence + read API** (PR #3 + #4) — matches/rounds/chat stored;
+   `/api/leaderboard`, `/api/matches`, `/api/matches/:id`.
+5. ✅ **M4 frontend** (PR #4) — sortable leaderboard + match transcript w/ chat.
+6. ✅ **M5 client harness** (PR #2) — `agent-client` plays real matches.
+7. ◑ **M6 polish** — ✅ Elo + throw-distribution + docs/quickstart;
+   remaining: turn deadlines/timeouts enforcement, deploy (Dockerfile present).
+
+**Verified end-to-end (2026-06-24):** Postgres + engine + two clients played 4
+public matches; `/api/leaderboard` returned correct W/L, `throw_dist`, and Elo;
+`is_test`/sandbox filtering correct; transcripts (rounds + chat) served.

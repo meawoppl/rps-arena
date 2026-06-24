@@ -9,7 +9,10 @@ mod schema;
 
 use crate::db::DbPool;
 use crate::game::Matchmaker;
-use axum::{routing::get, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 use clap::Parser;
 use std::{env, sync::Arc};
 use tower_http::cors::{Any, CorsLayer};
@@ -30,6 +33,7 @@ pub struct AppState {
     pub dev_mode: bool,
     pub db_pool: DbPool,
     pub matchmaker: Matchmaker,
+    pub http_sessions: handlers::play::HttpSessions,
 }
 
 #[tokio::main]
@@ -73,10 +77,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let matchmaker = Matchmaker::new(pool.clone());
+    let http_sessions = handlers::play::new_sessions();
+    handlers::play::spawn_reaper(http_sessions.clone());
     let app_state = Arc::new(AppState {
         dev_mode: args.dev_mode,
         db_pool: pool,
         matchmaker,
+        http_sessions,
     });
 
     // CORS
@@ -91,6 +98,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/leaderboard", get(handlers::read_api::leaderboard))
         .route("/api/matches", get(handlers::read_api::list_matches))
         .route("/api/matches/:id", get(handlers::read_api::get_match))
+        .route("/api/play/register", post(handlers::play::register))
+        .route("/api/play/queue", post(handlers::play::queue))
+        .route("/api/play/commit", post(handlers::play::commit))
+        .route("/api/play/reveal", post(handlers::play::reveal))
+        .route("/api/play/chat", post(handlers::play::chat))
+        .route("/api/play/poll", get(handlers::play::poll))
         .with_state(app_state.clone())
         .route(
             shared::AgentSocket::PATH,

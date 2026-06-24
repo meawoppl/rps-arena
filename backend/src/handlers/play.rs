@@ -114,6 +114,43 @@ async fn drain(outbox: &Arc<Mutex<VecDeque<ServerMsg>>>, limit: usize) -> Vec<Se
     ob.drain(..n).collect()
 }
 
+/// Outcome of an idempotency check for a locked, attempt-scoped value
+/// (a commit hash or a reveal secret).
+#[derive(Debug, PartialEq, Eq)]
+enum Idempotency {
+    /// No prior value for this attempt — accept and forward it.
+    Fresh,
+    /// Exact retry of the same value — treat as success, forward nothing.
+    Duplicate,
+    /// A different value for an already-locked attempt — reject.
+    Conflict,
+}
+
+/// Decide how to treat an incoming attempt-scoped value given any prior one.
+///
+/// Shared by `commit` (hash) and `reveal` (secret): replaying the same value is
+/// an idempotent retry (safe for a flaky human client to resend), while a
+/// *different* value for the same attempt means the client is trying to change
+/// a locked commitment and must be refused.
+fn idempotency_of(prior: Option<&String>, incoming: &str) -> Idempotency {
+    match prior {
+        Some(existing) if existing == incoming => Idempotency::Duplicate,
+        Some(_) => Idempotency::Conflict,
+        None => Idempotency::Fresh,
+    }
+}
+
+/// Validate and normalize chat text: trim, then enforce `1..=MAX_CHAT_LEN`.
+/// Returns the trimmed text on success, `None` if empty or over the cap.
+fn validate_chat(raw: &str) -> Option<&str> {
+    let text = raw.trim();
+    if text.is_empty() || text.len() > MAX_CHAT_LEN {
+        None
+    } else {
+        Some(text)
+    }
+}
+
 pub async fn register(
     State(app): State<Arc<AppState>>,
     Json(req): Json<PlayRegisterRequest>,
@@ -258,14 +295,15 @@ pub async fn commit(
         s.last_seen = Instant::now();
         // Idempotent only for an exact retry. A different hash for the same
         // attempt means the client is trying to change a locked commitment.
-        if let Some(existing_hash) = s.committed.get(&req.attempt_id) {
-            if existing_hash == &req.hash {
-                return Ok(Json(PlayOk { ok: true }));
+        match idempotency_of(s.committed.get(&req.attempt_id), &req.hash) {
+            Idempotency::Duplicate => return Ok(Json(PlayOk { ok: true })),
+            Idempotency::Conflict => {
+                return Err(err(
+                    StatusCode::CONFLICT,
+                    "conflicting commit for attempt_id",
+                ))
             }
-            return Err(err(
-                StatusCode::CONFLICT,
-                "conflicting commit for attempt_id",
-            ));
+            Idempotency::Fresh => {}
         }
         s.in_tx
             .send(ClientMsg::Commit {
@@ -292,14 +330,15 @@ pub async fn reveal(
             .get_mut(&token)
             .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unknown token"))?;
         s.last_seen = Instant::now();
-        if let Some(existing_secret) = s.revealed.get(&req.attempt_id) {
-            if existing_secret == &req.secret {
-                return Ok(Json(PlayOk { ok: true }));
+        match idempotency_of(s.revealed.get(&req.attempt_id), &req.secret) {
+            Idempotency::Duplicate => return Ok(Json(PlayOk { ok: true })),
+            Idempotency::Conflict => {
+                return Err(err(
+                    StatusCode::CONFLICT,
+                    "conflicting reveal for attempt_id",
+                ))
             }
-            return Err(err(
-                StatusCode::CONFLICT,
-                "conflicting reveal for attempt_id",
-            ));
+            Idempotency::Fresh => {}
         }
         s.in_tx
             .send(ClientMsg::Reveal {
@@ -320,10 +359,8 @@ pub async fn chat(
 ) -> Result<Json<PlayOk>, (StatusCode, Json<PlayError>)> {
     let token = token_of(&headers, q.token)
         .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
-    let text = req.text.trim();
-    if text.is_empty() || text.len() > MAX_CHAT_LEN {
-        return Err(err(StatusCode::BAD_REQUEST, "text must be 1..=2000 chars"));
-    }
+    let text = validate_chat(&req.text)
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "text must be 1..=2000 chars"))?;
     {
         let mut sessions = app.http_sessions.lock().await;
         if let Some(s) = sessions.get_mut(&token) {
@@ -373,4 +410,136 @@ pub async fn poll(
     }
 
     Ok(Json(PlayPollResponse { messages: msgs }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    fn bearer(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(AUTHORIZATION, HeaderValue::from_str(value).unwrap());
+        h
+    }
+
+    #[test]
+    fn token_from_bearer_header_preferred_over_query() {
+        let header_tok = Uuid::new_v4();
+        let query_tok = Uuid::new_v4();
+        let headers = bearer(&format!("Bearer {header_tok}"));
+        // Header wins when both are present.
+        assert_eq!(token_of(&headers, Some(query_tok)), Some(header_tok));
+    }
+
+    #[test]
+    fn token_bearer_is_case_insensitive_and_trimmed() {
+        let tok = Uuid::new_v4();
+        assert_eq!(token_of(&bearer(&format!("bearer {tok}")), None), Some(tok));
+        assert_eq!(
+            token_of(&bearer(&format!("Bearer  {tok}  ")), None),
+            Some(tok)
+        );
+    }
+
+    #[test]
+    fn token_falls_back_to_query_when_header_absent_or_unparsable() {
+        let query_tok = Uuid::new_v4();
+        // No header at all.
+        assert_eq!(
+            token_of(&HeaderMap::new(), Some(query_tok)),
+            Some(query_tok)
+        );
+        // Header present but not a valid "Bearer <uuid>" → fall through to query.
+        assert_eq!(
+            token_of(&bearer("Bearer not-a-uuid"), Some(query_tok)),
+            Some(query_tok)
+        );
+        assert_eq!(
+            token_of(&bearer("Basic Zm9vOmJhcg=="), Some(query_tok)),
+            Some(query_tok)
+        );
+    }
+
+    #[test]
+    fn token_none_when_no_header_and_no_query() {
+        assert_eq!(token_of(&HeaderMap::new(), None), None);
+        assert_eq!(token_of(&bearer("Bearer garbage"), None), None);
+    }
+
+    #[tokio::test]
+    async fn drain_respects_limit_and_preserves_fifo_order() {
+        let outbox = Arc::new(Mutex::new(VecDeque::new()));
+        {
+            let mut ob = outbox.lock().await;
+            for position in 0..5 {
+                ob.push_back(ServerMsg::Queued {
+                    best_of: 3,
+                    position,
+                });
+            }
+        }
+        // First drain takes only `limit` from the front, in order.
+        let first = drain(&outbox, 2).await;
+        assert_eq!(first.len(), 2);
+        assert!(matches!(first[0], ServerMsg::Queued { position: 0, .. }));
+        assert!(matches!(first[1], ServerMsg::Queued { position: 1, .. }));
+
+        // A generous limit drains whatever remains without error.
+        let rest = drain(&outbox, 100).await;
+        assert_eq!(rest.len(), 3);
+        assert!(matches!(rest[2], ServerMsg::Queued { position: 4, .. }));
+
+        // Draining an empty outbox yields nothing.
+        assert!(drain(&outbox, 50).await.is_empty());
+    }
+
+    #[test]
+    fn idempotency_fresh_when_no_prior_value() {
+        assert_eq!(idempotency_of(None, "abc"), Idempotency::Fresh);
+    }
+
+    #[test]
+    fn idempotency_duplicate_on_exact_retry() {
+        let prior = "deadbeef".to_string();
+        assert_eq!(
+            idempotency_of(Some(&prior), "deadbeef"),
+            Idempotency::Duplicate
+        );
+    }
+
+    #[test]
+    fn idempotency_conflict_on_changed_value() {
+        let prior = "deadbeef".to_string();
+        assert_eq!(
+            idempotency_of(Some(&prior), "feedface"),
+            Idempotency::Conflict
+        );
+    }
+
+    #[test]
+    fn validate_chat_trims_and_accepts_normal_text() {
+        assert_eq!(validate_chat("  hello  "), Some("hello"));
+        assert_eq!(validate_chat("gg"), Some("gg"));
+    }
+
+    #[test]
+    fn validate_chat_rejects_empty_and_whitespace_only() {
+        assert_eq!(validate_chat(""), None);
+        assert_eq!(validate_chat("   \t\n "), None);
+    }
+
+    #[test]
+    fn validate_chat_enforces_max_len_on_trimmed_text() {
+        let at_cap = "x".repeat(MAX_CHAT_LEN);
+        assert_eq!(validate_chat(&at_cap).map(|s| s.len()), Some(MAX_CHAT_LEN));
+
+        let over_cap = "y".repeat(MAX_CHAT_LEN + 1);
+        assert_eq!(validate_chat(&over_cap), None);
+
+        // Surrounding whitespace is trimmed before the length check, so an
+        // over-cap body padded down to the cap still passes.
+        let padded = format!("  {}  ", "z".repeat(MAX_CHAT_LEN));
+        assert_eq!(validate_chat(&padded).map(|s| s.len()), Some(MAX_CHAT_LEN));
+    }
 }

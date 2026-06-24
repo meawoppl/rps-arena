@@ -3,6 +3,18 @@
 version = 4
 
 [[package]]
+name = "agent-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "shared",
+ "tokio",
+ "uuid",
+ "ws-bridge",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2760,6 +2772,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-tungstenite",
  "wasm-bindgen-futures",
  "web-sys",
 ]

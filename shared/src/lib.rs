@@ -139,7 +139,7 @@ pub fn commit_hash(secret: &str) -> String {
 pub fn parse_secret(secret: &str) -> Option<(Throw, String)> {
     let (throw, nonce) = secret.split_once(':')?;
     let throw = Throw::parse(throw)?;
-    if nonce.len() < MIN_NONCE_HEX_LEN {
+    if nonce.len() < MIN_NONCE_HEX_LEN || !nonce.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
     Some((throw, nonce.to_string()))
@@ -291,6 +291,7 @@ pub struct MatchSummary {
 /// One played round attempt in a transcript.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoundRecord {
+    pub attempt_id: Uuid,
     pub round_no: u32,
     pub attempt_no: u32,
     pub throw_a: Throw,
@@ -365,6 +366,12 @@ mod tests {
     #[test]
     fn short_nonce_rejected() {
         let secret = format!("{}:{}", "rock", "short");
+        assert_eq!(parse_secret(&secret), None);
+    }
+
+    #[test]
+    fn non_hex_nonce_rejected() {
+        let secret = make_secret(Throw::Rock, "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
         assert_eq!(parse_secret(&secret), None);
     }
 

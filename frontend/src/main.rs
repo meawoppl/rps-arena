@@ -1,6 +1,6 @@
 use gloo_net::http::Request;
 use gloo_timers::future::sleep;
-use shared::{AppSocket, ClientMsg, HealthResponse, ServerMsg};
+use shared::{AgentSocket, ClientMsg, HealthResponse, ServerMsg};
 use std::time::Duration;
 use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
@@ -59,7 +59,7 @@ fn home() -> Html {
         let ws_status = ws_status.clone();
         let ws_messages = ws_messages.clone();
         use_effect_with((), move |_| {
-            match ws_bridge::yew_client::connect::<AppSocket>() {
+            match ws_bridge::yew_client::connect::<AgentSocket>() {
                 Ok(conn) => {
                     ws_status.set("Connected".to_string());
                     let (mut tx, mut rx) = conn.split();
@@ -93,10 +93,7 @@ fn home() -> Html {
                                     current.push(format!("Received: Error — {}", message));
                                     msgs.set(current);
                                 }
-                                Ok(ServerMsg::ServerShutdown { reason, .. }) => {
-                                    status.set(format!("Server shutting down: {}", reason));
-                                    break;
-                                }
+                                Ok(_) => {}
                                 Err(e) => {
                                     status.set(format!("WebSocket error: {}", e));
                                     break;

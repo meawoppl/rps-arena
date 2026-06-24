@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/api/health", get(handlers::health::health))
         .with_state(app_state)
-        .route(shared::AppSocket::PATH, handlers::websocket::handler())
+        .route(shared::AgentSocket::PATH, handlers::websocket::handler())
         .fallback(axum::routing::get(embedded_assets::serve_embedded_frontend))
         .layer(cors);
 

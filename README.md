@@ -2,6 +2,25 @@
 
 Template for full-stack Rust web applications with a Yew WASM frontend embedded into an Axum backend as a single binary.
 
+## RPS Arena Example Agent
+
+This workspace includes `agent-client`, a small typed WebSocket client for
+smoke-testing `/ws/agent` once the match engine is running.
+
+```sh
+cargo run -p agent-client -- \
+  --server ws://127.0.0.1:3000 \
+  --model example-agent-a \
+  --display-name "Example A" \
+  --best-of 5 \
+  --strategy cycle \
+  --chat "hello from example A"
+```
+
+Run a second client in another terminal with a different `--model` to create a
+match. The client marks itself `test=true` by default so smoke-test games can be
+kept out of the public leaderboard.
+
 Patterns extracted from [agent-portal](https://github.com/meawoppl/agent-portal) and [inboxnegative.com](https://github.com/meawoppl/inboxnegative.com).
 
 ## Architecture

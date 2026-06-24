@@ -254,8 +254,325 @@ tbody tr:last-child td {
     color: #7aa2f7;
 }
 
+.primary-link,
+.primary-button,
+.ghost-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 38px;
+    padding: 0 14px;
+    border: 1px solid #3d6b4f;
+    border-radius: 7px;
+    background: #1d3327;
+    color: #d7f7dd;
+    font-weight: 680;
+    cursor: pointer;
+}
+
+.primary-link:hover,
+.primary-button:hover {
+    border-color: #61a875;
+    background: #244430;
+}
+
+.ghost-button {
+    border-color: #303846;
+    background: #171b23;
+    color: #c9d1d9;
+}
+
+.primary-button:disabled,
+.ghost-button:disabled,
+.throw-button:disabled,
+.chat-compose button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
 .summary-band {
     padding: 18px 0 8px;
+}
+
+.play-shell {
+    width: min(1240px, calc(100vw - 32px));
+}
+
+.play-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+    gap: 18px;
+    align-items: start;
+}
+
+.play-panel,
+.side-section,
+.human-setup,
+.arena {
+    border: 1px solid #303846;
+    border-radius: 8px;
+    background: #151922;
+}
+
+.play-panel {
+    display: grid;
+    gap: 14px;
+    padding: 14px;
+}
+
+.human-setup {
+    display: grid;
+    grid-template-columns: minmax(160px, 1fr) 140px auto;
+    gap: 10px;
+    align-items: end;
+    padding: 12px;
+}
+
+.human-setup label {
+    display: grid;
+    gap: 6px;
+    color: #9aa6b2;
+    font-size: 13px;
+}
+
+.human-setup input,
+.human-setup select,
+.chat-compose input {
+    width: 100%;
+    min-height: 38px;
+    border: 1px solid #303846;
+    border-radius: 7px;
+    background: #10141d;
+    color: #e6edf3;
+    padding: 0 10px;
+}
+
+.arena {
+    padding: 18px;
+}
+
+.scoreboard {
+    display: grid;
+    grid-template-columns: 1fr minmax(150px, 220px) 1fr;
+    gap: 12px;
+    align-items: stretch;
+}
+
+.scoreboard > div {
+    display: grid;
+    gap: 6px;
+    align-content: center;
+    min-height: 96px;
+    padding: 12px;
+    border: 1px solid #252d3a;
+    border-radius: 8px;
+    background: #111721;
+}
+
+.scoreboard strong {
+    font-size: 38px;
+    line-height: 1;
+}
+
+.scoreboard > div:last-child {
+    text-align: right;
+}
+
+.round-state {
+    text-align: center;
+}
+
+.round-state span {
+    color: #e6edf3;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.round-state b {
+    color: #9aa6b2;
+    font-size: 13px;
+    font-weight: 640;
+    text-transform: uppercase;
+}
+
+.phase-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-top: 12px;
+}
+
+.phase,
+.inline-error {
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 680;
+}
+
+.phase.ready {
+    background: #202735;
+    color: #c9d1d9;
+}
+
+.phase.waiting {
+    background: #2e2818;
+    color: #e0af68;
+}
+
+.phase.live {
+    background: #1d3327;
+    color: #9ece6a;
+}
+
+.phase.done {
+    background: #263042;
+    color: #7aa2f7;
+}
+
+.inline-error {
+    background: #351b24;
+    color: #f7768e;
+}
+
+.throw-pad {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.throw-button {
+    display: grid;
+    gap: 8px;
+    justify-items: center;
+    min-height: 138px;
+    padding: 16px;
+    border: 1px solid #303846;
+    border-radius: 8px;
+    background: #111721;
+    color: #e6edf3;
+    cursor: pointer;
+}
+
+.throw-button:hover:not(:disabled),
+.throw-button.active {
+    border-color: #7aa2f7;
+    background: #172136;
+}
+
+.throw-button span {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: #263042;
+    color: #7dcfff;
+    font-size: 28px;
+    font-weight: 800;
+}
+
+.throw-button b {
+    font-size: 18px;
+}
+
+.play-side {
+    display: grid;
+    gap: 14px;
+}
+
+.side-section {
+    padding: 12px;
+}
+
+.live-chat {
+    display: grid;
+    gap: 8px;
+    max-height: 300px;
+    overflow: auto;
+}
+
+.live-chat article {
+    padding: 9px 10px;
+    border: 1px solid #252d3a;
+    border-radius: 7px;
+    background: #10141d;
+}
+
+.live-chat strong {
+    color: #f0f4f8;
+    font-size: 13px;
+}
+
+.live-chat p {
+    margin-top: 4px;
+    color: #c9d1d9;
+    overflow-wrap: anywhere;
+}
+
+.compact {
+    padding: 10px;
+}
+
+.chat-compose {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.chat-compose button {
+    min-height: 38px;
+    padding: 0 12px;
+    border: 1px solid #303846;
+    border-radius: 7px;
+    background: #202735;
+    color: #e6edf3;
+    cursor: pointer;
+}
+
+.event-log {
+    display: grid;
+    gap: 8px;
+    max-height: 340px;
+    margin: 0;
+    padding-left: 20px;
+    color: #c9d1d9;
+}
+
+.event-log li {
+    padding-left: 2px;
+}
+
+@media (max-width: 840px) {
+    .topbar,
+    .match-row,
+    .section-heading {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .play-layout,
+    .human-setup,
+    .scoreboard,
+    .throw-pad {
+        grid-template-columns: 1fr;
+    }
+
+    .scoreboard > div:last-child {
+        text-align: left;
+    }
+
+    .throw-button {
+        grid-template-columns: 56px 1fr;
+        justify-items: start;
+        align-items: center;
+        min-height: 84px;
+    }
 }
 
 .summary-band h2 {

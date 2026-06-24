@@ -1,8 +1,14 @@
+use std::{cell::RefCell, rc::Rc};
+
 use gloo_net::http::Request;
+use gloo_timers::callback::Interval;
 use shared::{
-    ChatRecord, EndReason, LeaderboardRow, MatchDetail, MatchSummary, Outcome, RoundRecord, Throw,
+    commit_hash, make_secret, ChatRecord, EndReason, LeaderboardRow, MatchDetail, MatchSummary,
+    Outcome, PlayChatRequest, PlayCommitRequest, PlayQueueRequest, PlayRegisterRequest,
+    PlayRegisterResponse, PlayRevealRequest, RoundRecord, ServerMsg, Throw,
 };
 use wasm_bindgen_futures::spawn_local;
+use web_sys::{HtmlInputElement, HtmlSelectElement};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
@@ -10,6 +16,8 @@ use yew_router::prelude::*;
 enum Route {
     #[at("/")]
     Home,
+    #[at("/play")]
+    Play,
     #[at("/matches/:id")]
     Match { id: String },
     #[not_found]
@@ -29,6 +37,7 @@ enum SortKey {
 fn switch(route: Route) -> Html {
     match route {
         Route::Home => html! { <Dashboard /> },
+        Route::Play => html! { <HumanPlay /> },
         Route::Match { id } => html! { <MatchPage id={id} /> },
         Route::NotFound => html! { <main class="shell"><h1>{ "Not found" }</h1></main> },
     }
@@ -74,7 +83,7 @@ fn dashboard() -> Html {
                     <h1>{ "RPS Arena" }</h1>
                     <p class="muted">{ "Public model leaderboard and match transcripts" }</p>
                 </div>
-                <span class="pill">{ "Public board" }</span>
+                <Link<Route> to={Route::Play} classes="primary-link">{ "Play" }</Link<Route>>
             </header>
 
             <section class="section">
@@ -96,6 +105,214 @@ fn dashboard() -> Html {
                     <h2>{ "Recent Matches" }</h2>
                 </div>
                 { render_match_list(&matches) }
+            </section>
+        </main>
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct HumanGame {
+    name: String,
+    best_of: u32,
+    token: Option<String>,
+    phase: HumanPhase,
+    opponent: Option<String>,
+    match_id: Option<uuid::Uuid>,
+    round_no: Option<u32>,
+    attempt_no: Option<u32>,
+    score_you: u32,
+    score_them: u32,
+    attempt_id: Option<uuid::Uuid>,
+    pending_secret: Option<String>,
+    selected_throw: Option<Throw>,
+    chat_text: String,
+    error: Option<String>,
+    events: Vec<String>,
+    chat: Vec<(String, String)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HumanPhase {
+    Setup,
+    Queueing,
+    WaitingForThrow,
+    WaitingForReveal,
+    Complete,
+}
+
+impl Default for HumanGame {
+    fn default() -> Self {
+        Self {
+            name: "Human".to_string(),
+            best_of: 3,
+            token: None,
+            phase: HumanPhase::Setup,
+            opponent: None,
+            match_id: None,
+            round_no: None,
+            attempt_no: None,
+            score_you: 0,
+            score_them: 0,
+            attempt_id: None,
+            pending_secret: None,
+            selected_throw: None,
+            chat_text: String::new(),
+            error: None,
+            events: vec![],
+            chat: vec![],
+        }
+    }
+}
+
+#[function_component(HumanPlay)]
+fn human_play() -> Html {
+    let game = use_state(HumanGame::default);
+    let current_game = use_mut_ref(HumanGame::default);
+
+    {
+        let game = game.clone();
+        let current_game = current_game.clone();
+        let token = game.token.clone();
+        use_effect_with(token, move |token| {
+            let interval = token.clone().map(|token| {
+                Interval::new(1700, move || {
+                    let game = game.clone();
+                    let current_game = current_game.clone();
+                    let token = token.clone();
+                    spawn_local(async move {
+                        match poll_play(&token).await {
+                            Ok(messages) => apply_server_messages(game, current_game, messages),
+                            Err(err) => update_game(&game, &current_game, |g| {
+                                g.error = Some(err);
+                            }),
+                        }
+                    });
+                })
+            });
+            move || drop(interval)
+        });
+    }
+
+    let on_name = {
+        let game = game.clone();
+        let current_game = current_game.clone();
+        Callback::from(move |event: InputEvent| {
+            let input: HtmlInputElement = event.target_unchecked_into();
+            let value = input.value();
+            update_game(&game, &current_game, |g| g.name = value);
+        })
+    };
+    let on_best_of = {
+        let game = game.clone();
+        let current_game = current_game.clone();
+        Callback::from(move |event: Event| {
+            let select: HtmlSelectElement = event.target_unchecked_into();
+            let value = select.value().parse::<u32>().unwrap_or(3);
+            update_game(&game, &current_game, |g| g.best_of = value);
+        })
+    };
+    let start = {
+        let game = game.clone();
+        let current_game = current_game.clone();
+        Callback::from(move |_| {
+            let game = game.clone();
+            let current_game = current_game.clone();
+            spawn_local(async move {
+                let current = current_game.borrow().clone();
+                let name = current.name.trim().to_string();
+                if name.is_empty() {
+                    update_game(&game, &current_game, |g| {
+                        g.error = Some("name required".to_string());
+                    });
+                    return;
+                }
+                update_game(&game, &current_game, |g| {
+                    g.phase = HumanPhase::Queueing;
+                    g.error = None;
+                    g.events.clear();
+                    g.chat.clear();
+                    g.events.push("Registered as a human player.".to_string());
+                });
+                match register_and_queue(&name, current.best_of).await {
+                    Ok(token) => update_game(&game, &current_game, |g| {
+                        g.token = Some(token);
+                        g.events.push("Joined matchmaking queue.".to_string());
+                    }),
+                    Err(err) => update_game(&game, &current_game, |g| {
+                        g.phase = HumanPhase::Setup;
+                        g.error = Some(err);
+                    }),
+                }
+            });
+        })
+    };
+    let leave = {
+        let game = game.clone();
+        let current_game = current_game.clone();
+        Callback::from(move |_| set_game(&game, &current_game, HumanGame::default()))
+    };
+    let on_chat_input = {
+        let game = game.clone();
+        let current_game = current_game.clone();
+        Callback::from(move |event: InputEvent| {
+            let input: HtmlInputElement = event.target_unchecked_into();
+            let value = input.value();
+            update_game(&game, &current_game, |g| g.chat_text = value);
+        })
+    };
+    let send_chat = {
+        let game = game.clone();
+        let current_game = current_game.clone();
+        Callback::from(move |_| {
+            let game = game.clone();
+            let current_game = current_game.clone();
+            spawn_local(async move {
+                let current = current_game.borrow().clone();
+                let Some(token) = current.token else {
+                    return;
+                };
+                let text = current.chat_text.trim().to_string();
+                if text.is_empty() {
+                    return;
+                }
+                match post_auth_json::<_, shared::PlayOk>(
+                    "/api/play/chat",
+                    &token,
+                    &PlayChatRequest { text: text.clone() },
+                )
+                .await
+                {
+                    Ok(_) => update_game(&game, &current_game, |g| {
+                        g.chat_text.clear();
+                        g.chat.push(("you".to_string(), text));
+                    }),
+                    Err(err) => update_game(&game, &current_game, |g| g.error = Some(err)),
+                }
+            });
+        })
+    };
+
+    html! {
+        <main class="shell play-shell">
+            <header class="topbar">
+                <div>
+                    <Link<Route> to={Route::Home} classes="back-link">{ "Leaderboard" }</Link<Route>>
+                    <h1>{ "Play RPS Arena" }</h1>
+                    <p class="muted">{ "Join the same matchmaking queue used by agents and curl players." }</p>
+                </div>
+                <button type="button" class="ghost-button" onclick={leave}>{ "Reset" }</button>
+            </header>
+
+            <section class="play-layout">
+                <div class="play-panel">
+                    { render_human_setup(&game, on_name, on_best_of, start) }
+                    { render_arena(&game) }
+                    { render_throw_controls(&game, &current_game) }
+                </div>
+                <aside class="play-side">
+                    { render_chat_panel(&game, on_chat_input, send_chat) }
+                    { render_event_log(&game) }
+                </aside>
             </section>
         </main>
     }
@@ -343,6 +560,472 @@ fn render_chat(chat: &[ChatRecord]) -> Html {
                 </article>
             }) }
         </div>
+    }
+}
+
+fn render_human_setup(
+    game: &UseStateHandle<HumanGame>,
+    on_name: Callback<InputEvent>,
+    on_best_of: Callback<Event>,
+    start: Callback<MouseEvent>,
+) -> Html {
+    let disabled = game.phase != HumanPhase::Setup;
+    html! {
+        <section class="human-setup" aria-label="Human player setup">
+            <label>
+                <span>{ "Name" }</span>
+                <input type="text" value={game.name.clone()} oninput={on_name} disabled={disabled} maxlength="40" />
+            </label>
+            <label>
+                <span>{ "Match" }</span>
+                <select onchange={on_best_of} disabled={disabled} value={game.best_of.to_string()}>
+                    <option value="1">{ "Best of 1" }</option>
+                    <option value="3">{ "Best of 3" }</option>
+                    <option value="5">{ "Best of 5" }</option>
+                    <option value="7">{ "Best of 7" }</option>
+                </select>
+            </label>
+            <button type="button" class="primary-button" onclick={start} disabled={disabled}>
+                { "Join Queue" }
+            </button>
+        </section>
+    }
+}
+
+fn render_arena(game: &UseStateHandle<HumanGame>) -> Html {
+    let opponent = game
+        .opponent
+        .clone()
+        .unwrap_or_else(|| "waiting for opponent".to_string());
+    let round = game
+        .round_no
+        .map(|r| format!("Round {r}"))
+        .unwrap_or_else(|| "No round yet".to_string());
+    let attempt = game
+        .attempt_no
+        .map(|a| format!("attempt {a}"))
+        .unwrap_or_else(|| phase_label(game.phase).to_string());
+    html! {
+        <section class="arena">
+            <div class="scoreboard">
+                <div>
+                    <span class="muted">{ "You" }</span>
+                    <strong>{ game.score_you }</strong>
+                </div>
+                <div class="round-state">
+                    <span>{ round }</span>
+                    <b>{ attempt }</b>
+                </div>
+                <div>
+                    <span class="muted">{ opponent }</span>
+                    <strong>{ game.score_them }</strong>
+                </div>
+            </div>
+            <div class="phase-strip">
+                <span class={phase_class(game.phase)}>{ phase_label(game.phase) }</span>
+                {
+                    if let Some(err) = &game.error {
+                        html! { <span class="inline-error">{ err }</span> }
+                    } else {
+                        html! {}
+                    }
+                }
+            </div>
+        </section>
+    }
+}
+
+fn render_throw_controls(
+    game: &UseStateHandle<HumanGame>,
+    current_game: &Rc<RefCell<HumanGame>>,
+) -> Html {
+    let can_throw = game.phase == HumanPhase::WaitingForThrow && game.attempt_id.is_some();
+    html! {
+        <section class="throw-pad" aria-label="Choose throw">
+            { throw_button(game.clone(), current_game.clone(), Throw::Rock, "Rock", "R", can_throw) }
+            { throw_button(game.clone(), current_game.clone(), Throw::Paper, "Paper", "P", can_throw) }
+            { throw_button(game.clone(), current_game.clone(), Throw::Scissors, "Scissors", "S", can_throw) }
+        </section>
+    }
+}
+
+fn throw_button(
+    game: UseStateHandle<HumanGame>,
+    current_game: Rc<RefCell<HumanGame>>,
+    throw: Throw,
+    label: &'static str,
+    mark: &'static str,
+    enabled: bool,
+) -> Html {
+    let active = game.selected_throw == Some(throw);
+    let class = classes!("throw-button", active.then_some("active"));
+    let onclick = Callback::from(move |_| {
+        let game = game.clone();
+        let current_game = current_game.clone();
+        spawn_local(async move {
+            let current = current_game.borrow().clone();
+            let (Some(token), Some(attempt_id)) = (current.token.clone(), current.attempt_id)
+            else {
+                return;
+            };
+            let nonce = match random_nonce_hex() {
+                Ok(nonce) => nonce,
+                Err(err) => {
+                    update_game(&game, &current_game, |g| g.error = Some(err));
+                    return;
+                }
+            };
+            let secret = make_secret(throw, &nonce);
+            let hash = commit_hash(&secret);
+            update_game(&game, &current_game, |g| {
+                g.phase = HumanPhase::WaitingForReveal;
+                g.selected_throw = Some(throw);
+                g.pending_secret = Some(secret.clone());
+                g.error = None;
+            });
+            match post_auth_json::<_, shared::PlayOk>(
+                "/api/play/commit",
+                &token,
+                &PlayCommitRequest { attempt_id, hash },
+            )
+            .await
+            {
+                Ok(_) => update_game(&game, &current_game, |g| {
+                    g.events.push(format!("Committed {}.", throw_label(throw)));
+                }),
+                Err(err) => update_game(&game, &current_game, |g| {
+                    g.phase = HumanPhase::WaitingForThrow;
+                    g.error = Some(err);
+                }),
+            }
+        });
+    });
+
+    html! {
+        <button type="button" class={class} disabled={!enabled} {onclick}>
+            <span>{ mark }</span>
+            <b>{ label }</b>
+        </button>
+    }
+}
+
+fn render_chat_panel(
+    game: &UseStateHandle<HumanGame>,
+    on_chat_input: Callback<InputEvent>,
+    send_chat: Callback<MouseEvent>,
+) -> Html {
+    let disabled = game.token.is_none() || game.phase == HumanPhase::Complete;
+    html! {
+        <section class="side-section">
+            <div class="section-heading">
+                <h2>{ "Chat" }</h2>
+                <span class="untrusted">{ "Untrusted" }</span>
+            </div>
+            <div class="live-chat">
+                {
+                    if game.chat.is_empty() {
+                        html! { <p class="empty compact">{ "No chat yet." }</p> }
+                    } else {
+                        html! { for game.chat.iter().map(|(from, text)| html! {
+                            <article>
+                                <strong>{ from }</strong>
+                                <p>{ text }</p>
+                            </article>
+                        }) }
+                    }
+                }
+            </div>
+            <div class="chat-compose">
+                <input
+                    type="text"
+                    placeholder="Send a comment"
+                    value={game.chat_text.clone()}
+                    oninput={on_chat_input}
+                    disabled={disabled}
+                    maxlength="300"
+                />
+                <button type="button" onclick={send_chat} disabled={disabled}>{ "Send" }</button>
+            </div>
+        </section>
+    }
+}
+
+fn render_event_log(game: &UseStateHandle<HumanGame>) -> Html {
+    html! {
+        <section class="side-section">
+            <div class="section-heading">
+                <h2>{ "Log" }</h2>
+            </div>
+            <ol class="event-log">
+                { for game.events.iter().rev().take(12).map(|event| html! { <li>{ event }</li> }) }
+            </ol>
+        </section>
+    }
+}
+
+async fn register_and_queue(name: &str, best_of: u32) -> Result<String, String> {
+    let registered: PlayRegisterResponse = post_json(
+        "/api/play/register",
+        &PlayRegisterRequest {
+            model: "human".to_string(),
+            display_name: name.to_string(),
+            test: false,
+        },
+    )
+    .await?;
+    let token = registered.token.to_string();
+    post_auth_json::<_, shared::PlayOk>("/api/play/queue", &token, &PlayQueueRequest { best_of })
+        .await?;
+    Ok(token)
+}
+
+async fn poll_play(token: &str) -> Result<Vec<ServerMsg>, String> {
+    let response = Request::get("/api/play/poll?timeout_ms=1500&limit=50")
+        .header("Authorization", &format!("Bearer {token}"))
+        .send()
+        .await
+        .map_err(|err| format!("poll failed: {err}"))?;
+    if !response.ok() {
+        return Err(format!("poll failed with HTTP {}", response.status()));
+    }
+    response
+        .json::<shared::PlayPollResponse>()
+        .await
+        .map(|body| body.messages)
+        .map_err(|err| format!("invalid poll response: {err}"))
+}
+
+fn apply_server_messages(
+    game: UseStateHandle<HumanGame>,
+    current_game: Rc<RefCell<HumanGame>>,
+    messages: Vec<ServerMsg>,
+) {
+    let mut next = current_game.borrow().clone();
+    for message in messages {
+        match message {
+            ServerMsg::Queued { best_of, position } => {
+                next.phase = HumanPhase::Queueing;
+                next.events.push(format!(
+                    "Queued for best-of-{best_of}; position {position}."
+                ));
+            }
+            ServerMsg::MatchStart {
+                match_id,
+                opponent_model,
+                best_of,
+                ..
+            } => {
+                next.match_id = Some(match_id);
+                next.opponent = Some(opponent_model.clone());
+                next.events.push(format!(
+                    "Matched with {opponent_model} for best-of-{best_of}."
+                ));
+            }
+            ServerMsg::RoundStart {
+                attempt_id,
+                round_no,
+                attempt_no,
+                score_you,
+                score_them,
+                ..
+            } => {
+                next.phase = HumanPhase::WaitingForThrow;
+                next.round_no = Some(round_no);
+                next.attempt_no = Some(attempt_no);
+                next.score_you = score_you;
+                next.score_them = score_them;
+                next.attempt_id = Some(attempt_id);
+                next.pending_secret = None;
+                next.selected_throw = None;
+                next.events
+                    .push(format!("Round {round_no}, attempt {attempt_no}."));
+            }
+            ServerMsg::AwaitReveal { attempt_id } => {
+                if next.attempt_id == Some(attempt_id) {
+                    if let (Some(token), Some(secret)) =
+                        (next.token.clone(), next.pending_secret.clone())
+                    {
+                        let game_for_reveal = game.clone();
+                        let current_game_for_reveal = current_game.clone();
+                        spawn_local(async move {
+                            match post_auth_json::<_, shared::PlayOk>(
+                                "/api/play/reveal",
+                                &token,
+                                &PlayRevealRequest { attempt_id, secret },
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    update_game(&game_for_reveal, &current_game_for_reveal, |g| {
+                                        g.events.push("Revealed committed throw.".to_string());
+                                    })
+                                }
+                                Err(err) => {
+                                    update_game(&game_for_reveal, &current_game_for_reveal, |g| {
+                                        g.error = Some(err)
+                                    });
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+            ServerMsg::RoundResult {
+                round_no,
+                attempt_no,
+                your_throw,
+                their_throw,
+                outcome,
+                score_you,
+                score_them,
+                ..
+            } => {
+                next.score_you = score_you;
+                next.score_them = score_them;
+                next.phase = HumanPhase::Queueing;
+                next.events.push(format!(
+                    "Round {round_no}.{attempt_no}: you played {}, they played {}; {}.",
+                    throw_label(your_throw),
+                    throw_label(their_throw),
+                    human_outcome_label(outcome)
+                ));
+            }
+            ServerMsg::ChatFrom { from_model, text } => {
+                next.chat.push((from_model, text));
+            }
+            ServerMsg::MatchEnd {
+                winner_model,
+                score_you,
+                score_them,
+                reason,
+            } => {
+                next.phase = HumanPhase::Complete;
+                next.token = None;
+                next.score_you = score_you;
+                next.score_them = score_them;
+                let winner = winner_model.unwrap_or_else(|| "no winner".to_string());
+                next.events.push(format!(
+                    "Match ended: {winner}, {}.",
+                    reason_label(Some(reason))
+                ));
+            }
+            ServerMsg::Error { message } => next.error = Some(message),
+            ServerMsg::Registered { .. }
+            | ServerMsg::TurnDeadline { .. }
+            | ServerMsg::Heartbeat => {}
+        }
+    }
+    trim_live_match_state(&mut next);
+    set_game(&game, &current_game, next);
+}
+
+async fn post_json<T, R>(url: &str, body: &T) -> Result<R, String>
+where
+    T: serde::Serialize,
+    R: serde::de::DeserializeOwned,
+{
+    let request = Request::post(url)
+        .json(body)
+        .map_err(|err| format!("request failed: {err}"))?;
+    parse_json_response(request.send().await).await
+}
+
+async fn post_auth_json<T, R>(url: &str, token: &str, body: &T) -> Result<R, String>
+where
+    T: serde::Serialize,
+    R: serde::de::DeserializeOwned,
+{
+    let request = Request::post(url)
+        .header("Authorization", &format!("Bearer {token}"))
+        .json(body)
+        .map_err(|err| format!("request failed: {err}"))?;
+    parse_json_response(request.send().await).await
+}
+
+async fn parse_json_response<R>(
+    response: Result<gloo_net::http::Response, gloo_net::Error>,
+) -> Result<R, String>
+where
+    R: serde::de::DeserializeOwned,
+{
+    let response = response.map_err(|err| format!("request failed: {err}"))?;
+    if !response.ok() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("request failed with HTTP {status}: {text}"));
+    }
+    response
+        .json::<R>()
+        .await
+        .map_err(|err| format!("invalid response: {err}"))
+}
+
+fn update_game(
+    game: &UseStateHandle<HumanGame>,
+    current_game: &Rc<RefCell<HumanGame>>,
+    f: impl FnOnce(&mut HumanGame),
+) {
+    let mut next = current_game.borrow().clone();
+    f(&mut next);
+    trim_live_match_state(&mut next);
+    set_game(game, current_game, next);
+}
+
+fn set_game(
+    game: &UseStateHandle<HumanGame>,
+    current_game: &Rc<RefCell<HumanGame>>,
+    next: HumanGame,
+) {
+    *current_game.borrow_mut() = next.clone();
+    game.set(next);
+}
+
+fn random_nonce_hex() -> Result<String, String> {
+    let mut bytes = [0_u8; 32];
+    let window = web_sys::window().ok_or_else(|| "browser window unavailable".to_string())?;
+    let crypto = window
+        .crypto()
+        .map_err(|_| "browser crypto unavailable".to_string())?;
+    crypto
+        .get_random_values_with_u8_array(&mut bytes)
+        .map_err(|_| "could not generate nonce".to_string())?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+fn trim_live_match_state(game: &mut HumanGame) {
+    if game.events.len() > 100 {
+        game.events.drain(..game.events.len() - 100);
+    }
+    if game.chat.len() > 200 {
+        game.chat.drain(..game.chat.len() - 200);
+    }
+}
+
+fn phase_label(phase: HumanPhase) -> &'static str {
+    match phase {
+        HumanPhase::Setup => "ready",
+        HumanPhase::Queueing => "waiting",
+        HumanPhase::WaitingForThrow => "choose throw",
+        HumanPhase::WaitingForReveal => "committed",
+        HumanPhase::Complete => "complete",
+    }
+}
+
+fn phase_class(phase: HumanPhase) -> &'static str {
+    match phase {
+        HumanPhase::Setup => "phase ready",
+        HumanPhase::Queueing => "phase waiting",
+        HumanPhase::WaitingForThrow => "phase live",
+        HumanPhase::WaitingForReveal => "phase waiting",
+        HumanPhase::Complete => "phase done",
+    }
+}
+
+fn human_outcome_label(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Win => "you won",
+        Outcome::Lose => "you lost",
+        Outcome::Tie => "tie",
     }
 }
 

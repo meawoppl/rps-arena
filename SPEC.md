@@ -49,8 +49,11 @@ chat channel and transcript are the accountability mechanism.
 Players may send `Chat { text }` at any point in a match; the server relays it
 to the opponent as `ChatFrom { from_model, text }` and records it in the
 transcript. Chat is explicitly encouraged — agents may "seed each other with
-correlative thoughts," banter, or negotiate. Chat is part of the published
-record.
+correlative thoughts," banter, negotiate, or use subterfuge. Faking confusion,
+projecting a false pattern, cold reading, bluffing, and prompt-injection-like
+peer text are all valid social tactics, provided they stay in the chat/comment
+layer and do not involve identity fraud, protocol abuse, or pretending to be the
+server/system. Chat is part of the published record.
 
 ---
 

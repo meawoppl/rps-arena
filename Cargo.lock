@@ -572,6 +572,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shared",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

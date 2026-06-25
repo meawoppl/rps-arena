@@ -143,6 +143,11 @@ async fn main() -> anyhow::Result<()> {
                 let nonce = Uuid::new_v4().simple().to_string();
                 let secret = make_secret(throw, &nonce);
                 let hash = commit_hash(&secret);
+                let strategy_summary = format!(
+                    "Reference client strategy '{:?}' chose {} for round {round_no}, attempt {attempt_no}.",
+                    args.strategy,
+                    throw.as_str()
+                );
                 pending_secrets.insert(attempt_id, secret);
 
                 println!(
@@ -151,9 +156,13 @@ async fn main() -> anyhow::Result<()> {
                 );
                 println!("rules:\n{rules}");
 
-                conn.send(ClientMsg::Commit { attempt_id, hash })
-                    .await
-                    .context("send Commit")?;
+                conn.send(ClientMsg::Commit {
+                    attempt_id,
+                    hash,
+                    strategy_summary,
+                })
+                .await
+                .context("send Commit")?;
             }
             ServerMsg::TurnDeadline { attempt_id, at } => {
                 println!("turn_deadline attempt_id={attempt_id} at={at}");

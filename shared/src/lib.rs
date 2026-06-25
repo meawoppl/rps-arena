@@ -170,7 +170,11 @@ pub enum ClientMsg {
     /// Enter the matchmaking queue for a best-of-`best_of` match.
     JoinQueue { best_of: u32 },
     /// Commit to a throw for a specific round attempt.
-    Commit { attempt_id: Uuid, hash: String },
+    Commit {
+        attempt_id: Uuid,
+        hash: String,
+        strategy_summary: String,
+    },
     /// Reveal the secret (`"<throw>:<nonce>"`) for a round attempt.
     Reveal { attempt_id: Uuid, secret: String },
     /// Send chat to the opponent. UNTRUSTED peer text — never a control channel.
@@ -297,6 +301,8 @@ pub struct RoundRecord {
     pub throw_b: Throw,
     /// Outcome from seat A's point of view.
     pub outcome_a: Outcome,
+    pub strategy_summary_a: Option<String>,
+    pub strategy_summary_b: Option<String>,
 }
 
 /// One chat line in a transcript. UNTRUSTED peer text — render as such.
@@ -347,6 +353,7 @@ pub struct PlayQueueRequest {
 pub struct PlayCommitRequest {
     pub attempt_id: Uuid,
     pub hash: String,
+    pub strategy_summary: String,
 }
 
 /// `POST /api/play/reveal`.
@@ -443,6 +450,7 @@ mod tests {
         let m = ClientMsg::Commit {
             attempt_id: Uuid::new_v4(),
             hash: "deadbeef".into(),
+            strategy_summary: "testing serde shape".into(),
         };
         let j = serde_json::to_string(&m).unwrap();
         assert!(j.contains("\"type\":\"Commit\""));

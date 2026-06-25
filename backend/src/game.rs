@@ -17,6 +17,8 @@ use crate::db::DbPool;
 use crate::db_ops::{self, SeatInfo};
 use crate::rules;
 
+const MAX_STRATEGY_SUMMARY_LEN: usize = 1000;
+
 /// A connected player from the engine's point of view.
 pub struct PlayerConn {
     pub agent_id: Uuid,
@@ -90,9 +92,19 @@ enum Flow {
     Abort(EndReason),
 }
 
+struct CommitValue {
+    hash: String,
+    strategy_summary: String,
+}
+
+enum PhaseValue {
+    Commit(CommitValue),
+    Reveal(String),
+}
+
 enum PhaseOut {
-    /// (seat-A value, seat-B value) — hashes for Commit, secrets for Reveal.
-    Both(String, String),
+    /// (seat-A value, seat-B value) — commit data for Commit, secrets for Reveal.
+    Both(PhaseValue, PhaseValue),
     /// `winner_seat` is the non-offending player.
     Abort { winner_seat: u8, reason: EndReason },
 }
@@ -123,6 +135,15 @@ fn end_reason_str(r: EndReason) -> &'static str {
     }
 }
 
+fn normalize_strategy_summary(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_STRATEGY_SUMMARY_LEN {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Process one inbound message during a phase; chat/ping are handled inline and
 /// relayed, the expected commit/reveal fills `slot`, anything else aborts.
 #[allow(clippy::too_many_arguments)]
@@ -135,7 +156,7 @@ async fn handle_msg(
     msg: Option<ClientMsg>,
     me: &PlayerConn,
     opp: &PlayerConn,
-    slot: &mut Option<String>,
+    slot: &mut Option<PhaseValue>,
 ) -> Flow {
     match msg {
         None => Flow::Abort(EndReason::Disconnect),
@@ -164,10 +185,21 @@ async fn handle_msg(
         Some(ClientMsg::Commit {
             attempt_id: aid,
             hash,
+            strategy_summary,
         }) if phase == Phase::Commit => {
             if aid == attempt_id {
-                *slot = Some(hash);
-                Flow::Continue
+                if let Some(strategy_summary) = normalize_strategy_summary(&strategy_summary) {
+                    *slot = Some(PhaseValue::Commit(CommitValue {
+                        hash,
+                        strategy_summary,
+                    }));
+                    Flow::Continue
+                } else {
+                    me.send(ServerMsg::Error {
+                        message: "strategy_summary required and must be at most 1000 bytes".into(),
+                    });
+                    Flow::Continue
+                }
             } else {
                 me.send(ServerMsg::Error {
                     message: "commit for wrong attempt_id".into(),
@@ -180,7 +212,7 @@ async fn handle_msg(
             secret,
         }) if phase == Phase::Reveal => {
             if aid == attempt_id {
-                *slot = Some(secret);
+                *slot = Some(PhaseValue::Reveal(secret));
                 Flow::Continue
             } else {
                 me.send(ServerMsg::Error {
@@ -209,8 +241,8 @@ async fn collect_phase(
     a: &mut PlayerConn,
     b: &mut PlayerConn,
 ) -> PhaseOut {
-    let mut va: Option<String> = None;
-    let mut vb: Option<String> = None;
+    let mut va: Option<PhaseValue> = None;
+    let mut vb: Option<PhaseValue> = None;
     while va.is_none() || vb.is_none() {
         tokio::select! {
             m = a.inbox.recv(), if va.is_none() => {
@@ -311,7 +343,7 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
                 rules: rules.clone(),
             });
 
-            let (ha, hb) = match collect_phase(
+            let (commit_a, commit_b) = match collect_phase(
                 &pool,
                 match_id,
                 round_no as i32,
@@ -322,7 +354,12 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
             )
             .await
             {
-                PhaseOut::Both(ha, hb) => (ha, hb),
+                PhaseOut::Both(PhaseValue::Commit(ca), PhaseValue::Commit(cb)) => (ca, cb),
+                PhaseOut::Both(_, _) => {
+                    forced_winner = None;
+                    end_reason = EndReason::ServerAbort;
+                    break 'match_loop;
+                }
                 PhaseOut::Abort {
                     winner_seat,
                     reason,
@@ -347,7 +384,12 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
             )
             .await
             {
-                PhaseOut::Both(sa, sb) => (sa, sb),
+                PhaseOut::Both(PhaseValue::Reveal(sa), PhaseValue::Reveal(sb)) => (sa, sb),
+                PhaseOut::Both(_, _) => {
+                    forced_winner = None;
+                    end_reason = EndReason::ServerAbort;
+                    break 'match_loop;
+                }
                 PhaseOut::Abort {
                     winner_seat,
                     reason,
@@ -359,8 +401,8 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
             };
 
             // Verify each reveal against that player's own commitment.
-            let ta = verify_reveal(&sa, &ha);
-            let tb = verify_reveal(&sb, &hb);
+            let ta = verify_reveal(&sa, &commit_a.hash);
+            let tb = verify_reveal(&sb, &commit_b.hash);
             let (ta, tb): (Throw, Throw) = match (ta, tb) {
                 (Some(ta), Some(tb)) => (ta, tb),
                 (None, _) => {
@@ -393,6 +435,8 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
                 tb.as_str().into(),
                 outcome_str(outcome_a).into(),
                 is_tie,
+                commit_a.strategy_summary,
+                commit_b.strategy_summary,
             )
             .await
             {

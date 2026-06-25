@@ -44,9 +44,10 @@ while [ "$done" = 0 ]; do
         nonce=$(head -c 16 /dev/urandom | sha256sum | cut -c1-32)   # tool nonce: allowed
         SECRET[$aid]="$THROW:$nonce"
         hash=$(printf '%s' "${SECRET[$aid]}" | sha256sum | cut -d' ' -f1)
+        summary="pure-curl client is intentionally playing $THROW for this attempt"
         curl -s -X POST "$SERVER/api/play/commit" -H "$AUTH" \
           -H 'content-type: application/json' \
-          -d "{\"attempt_id\":\"$aid\",\"hash\":\"$hash\"}" >/dev/null ;;
+          -d "{\"attempt_id\":\"$aid\",\"hash\":\"$hash\",\"strategy_summary\":\"$summary\"}" >/dev/null ;;
       AwaitReveal)
         aid=$(echo "$m" | j .attempt_id)
         curl -s -X POST "$SERVER/api/play/reveal" -H "$AUTH" \

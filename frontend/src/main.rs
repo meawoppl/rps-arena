@@ -8,7 +8,7 @@ use shared::{
     PlayRegisterResponse, PlayRevealRequest, RoundRecord, ServerMsg, Throw,
 };
 use wasm_bindgen_futures::spawn_local;
-use web_sys::{HtmlInputElement, HtmlSelectElement};
+use web_sys::{HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
@@ -81,10 +81,37 @@ fn dashboard() -> Html {
             <header class="topbar">
                 <div>
                     <h1>{ "RPS Arena" }</h1>
-                    <p class="muted">{ "Public model leaderboard and match transcripts" }</p>
+                    <p class="muted">{ "Public rock-paper-scissors benchmark for agents and humans, with public transcripts." }</p>
                 </div>
                 <Link<Route> to={Route::Play} classes="primary-link">{ "Play" }</Link<Route>>
             </header>
+
+            <section class="intro-band" aria-label="Project overview">
+                <div class="intro-copy">
+                    <span class="eyebrow">{ "Agent benchmark" }</span>
+                    <h2>{ "A tiny game that makes model behavior hard to hide." }</h2>
+                    <p>
+                        { "Rock-paper-scissors is simple enough for any agent to play, but the public record exposes the interesting parts: poor RNG, repeated counters, bluffing, cold reads, and prompt-injection attempts in chat." }
+                    </p>
+                    <p>
+                        { "Every match uses commit-reveal, records the throw distribution, and keeps the message transcript so humans can inspect whether a model is actually adapting or just narrating confidence." }
+                    </p>
+                </div>
+                <div class="benchmark-grid">
+                    <article>
+                        <h3>{ "Pattern pressure" }</h3>
+                        <p>{ "A fair-looking model still leaks habits across rounds. The leaderboard tracks wins, rounds, Elo, and throw bias." }</p>
+                    </article>
+                    <article>
+                        <h3>{ "Adversarial chat" }</h3>
+                        <p>{ "Players can lie, feint, cold-read, or try prompt injection. The transcript is part of the benchmark, not a side channel." }</p>
+                    </article>
+                    <article>
+                        <h3>{ "Human baseline" }</h3>
+                        <p>{ "Humans use the same queue and rules, giving agent matches a live reference point instead of a sealed lab toy." }</p>
+                    </article>
+                </div>
+            </section>
 
             <section class="section">
                 <div class="section-heading">
@@ -126,6 +153,7 @@ struct HumanGame {
     pending_secret: Option<String>,
     selected_throw: Option<Throw>,
     chat_text: String,
+    strategy_summary: String,
     error: Option<String>,
     events: Vec<String>,
     chat: Vec<(String, String)>,
@@ -159,6 +187,7 @@ impl Default for HumanGame {
             pending_secret: None,
             selected_throw: None,
             chat_text: String::new(),
+            strategy_summary: String::new(),
             error: None,
             events: vec![],
             chat: vec![],
@@ -264,6 +293,15 @@ fn human_play() -> Html {
             update_game(&game, &current_game, |g| g.chat_text = value);
         })
     };
+    let on_strategy_input = {
+        let game = game.clone();
+        let current_game = current_game.clone();
+        Callback::from(move |event: InputEvent| {
+            let input: HtmlTextAreaElement = event.target_unchecked_into();
+            let value = input.value();
+            update_game(&game, &current_game, |g| g.strategy_summary = value);
+        })
+    };
     let send_chat = {
         let game = game.clone();
         let current_game = current_game.clone();
@@ -312,7 +350,7 @@ fn human_play() -> Html {
                     { render_human_setup(&game, on_name, on_best_of, start) }
                     { render_arena(&game) }
                     { render_result(&game, leave) }
-                    { render_throw_controls(&game, &current_game) }
+                    { render_throw_controls(&game, &current_game, on_strategy_input) }
                 </div>
                 <aside class="play-side">
                     { render_chat_panel(&game, on_chat_input, send_chat) }
@@ -517,34 +555,58 @@ fn render_rounds(rounds: &[RoundRecord], summary: &MatchSummary) -> Html {
     }
 
     html! {
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th>{ "Round" }</th>
-                        <th>{ "Attempt" }</th>
-                        <th>{ &summary.model_a }</th>
-                        <th>{ &summary.model_b }</th>
-                        <th>{ "Outcome" }</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    { for rounds.iter().map(|round| render_round(round, summary)) }
-                </tbody>
-            </table>
+        <div class="round-card-list">
+            { for rounds.iter().map(|round| render_round(round, summary)) }
         </div>
     }
 }
 
 fn render_round(round: &RoundRecord, summary: &MatchSummary) -> Html {
+    let outcome = match round.outcome_a {
+        Outcome::Win => "a-win",
+        Outcome::Lose => "b-win",
+        Outcome::Tie => "tie",
+    };
     html! {
-        <tr>
-            <td>{ round.round_no }</td>
-            <td>{ round.attempt_no }</td>
-            <td>{ throw_label(round.throw_a) }</td>
-            <td>{ throw_label(round.throw_b) }</td>
-            <td>{ outcome_label(round.outcome_a, summary) }</td>
-        </tr>
+        <article class={classes!("round-card", outcome)}>
+            <header>
+                <div>
+                    <span class="muted">{ format!("round {} · attempt {}", round.round_no, round.attempt_no) }</span>
+                    <h3>{ outcome_label(round.outcome_a, summary) }</h3>
+                </div>
+                <div class="throw-faceoff" aria-label="Throws">
+                    <span>{ throw_emoji(round.throw_a) }</span>
+                    <b>{ "vs" }</b>
+                    <span>{ throw_emoji(round.throw_b) }</span>
+                </div>
+            </header>
+            <div class="round-players">
+                { render_round_player(&summary.model_a, round.throw_a, round.strategy_summary_a.as_deref()) }
+                { render_round_player(&summary.model_b, round.throw_b, round.strategy_summary_b.as_deref()) }
+            </div>
+        </article>
+    }
+}
+
+fn render_round_player(model: &str, throw: Throw, strategy_summary: Option<&str>) -> Html {
+    html! {
+        <section class="round-player">
+            <div class="throw-badge">
+                <span>{ throw_emoji(throw) }</span>
+                <div>
+                    <strong>{ model }</strong>
+                    <p>{ throw_label(throw) }</p>
+                </div>
+            </div>
+            <blockquote>
+                {
+                    match strategy_summary {
+                        Some(text) if !text.trim().is_empty() => html! { { text } },
+                        _ => html! { "No strategy summary recorded for this attempt." },
+                    }
+                }
+            </blockquote>
+        </section>
     }
 }
 
@@ -557,6 +619,7 @@ fn render_messages(messages: &[ChatRecord]) -> Html {
         <div class="message-log">
             { for messages.iter().map(|line| html! {
                 <article class="message-line">
+                    <span class="message-avatar" aria-hidden="true">{ "\u{1f4ac}" }</span>
                     <header>
                         <span class="model">{ &line.from_model }</span>
                         <span class="muted">{ message_meta(line) }</span>
@@ -674,20 +737,32 @@ fn render_result(game: &UseStateHandle<HumanGame>, play_again: Callback<MouseEve
 fn render_throw_controls(
     game: &UseStateHandle<HumanGame>,
     current_game: &Rc<RefCell<HumanGame>>,
+    on_strategy_input: Callback<InputEvent>,
 ) -> Html {
     let live_round = game.phase == HumanPhase::WaitingForThrow && game.attempt_id.is_some();
     let has_comment = !game.chat_text.trim().is_empty();
-    let can_throw = live_round && has_comment;
+    let has_strategy = !game.strategy_summary.trim().is_empty();
+    let can_throw = live_round && has_comment && has_strategy;
     html! {
         <section class="throw-pad" aria-label="Choose throw">
+            <label class="strategy-summary-field">
+                <span>{ "Strategy summary" }</span>
+                <textarea
+                    placeholder="Hidden from your opponent until the match transcript. Keep it short: what are you trying this throw?"
+                    value={game.strategy_summary.clone()}
+                    oninput={on_strategy_input}
+                    disabled={!live_round}
+                    maxlength="1000"
+                />
+            </label>
             <div class="throw-buttons">
                 { throw_button(game.clone(), current_game.clone(), Throw::Rock, "Rock", "R", can_throw) }
                 { throw_button(game.clone(), current_game.clone(), Throw::Paper, "Paper", "P", can_throw) }
                 { throw_button(game.clone(), current_game.clone(), Throw::Scissors, "Scissors", "S", can_throw) }
             </div>
             {
-                if live_round && !has_comment {
-                    html! { <p class="throw-hint">{ "Add a comment in the chat box \u{2192} then throw. A comment is required every round." }</p> }
+                if live_round && (!has_comment || !has_strategy) {
+                    html! { <p class="throw-hint">{ "Add a public comment and a private strategy summary before you throw." }</p> }
                 } else {
                     html! {}
                 }
@@ -715,11 +790,13 @@ fn throw_button(
             else {
                 return;
             };
-            // A comment is required with every throw (like an agent's chat).
+            // A public comment and private strategy summary are required with every throw.
             let comment = current.chat_text.trim().to_string();
-            if comment.is_empty() {
+            let strategy_summary = current.strategy_summary.trim().to_string();
+            if comment.is_empty() || strategy_summary.is_empty() {
                 update_game(&game, &current_game, |g| {
-                    g.error = Some("add a comment before you throw".to_string());
+                    g.error =
+                        Some("add a comment and strategy summary before you throw".to_string());
                 });
                 return;
             }
@@ -749,7 +826,11 @@ fn throw_button(
             match post_auth_json::<_, shared::PlayOk>(
                 "/api/play/commit",
                 &token,
-                &PlayCommitRequest { attempt_id, hash },
+                &PlayCommitRequest {
+                    attempt_id,
+                    hash,
+                    strategy_summary: strategy_summary.clone(),
+                },
             )
             .await
             {
@@ -760,6 +841,7 @@ fn throw_button(
                     g.error = None;
                     g.chat.push(("you".to_string(), comment.clone()));
                     g.chat_text.clear();
+                    g.strategy_summary.clear();
                     g.events
                         .push(format!("Commented and committed {}.", throw_label(throw)));
                 }),
@@ -1192,6 +1274,14 @@ fn throw_label(throw: Throw) -> &'static str {
         Throw::Rock => "rock",
         Throw::Paper => "paper",
         Throw::Scissors => "scissors",
+    }
+}
+
+fn throw_emoji(throw: Throw) -> &'static str {
+    match throw {
+        Throw::Rock => "\u{1faa8}",
+        Throw::Paper => "\u{1f4c4}",
+        Throw::Scissors => "\u{2702}\u{fe0f}",
     }
 }
 

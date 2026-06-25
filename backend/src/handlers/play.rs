@@ -43,7 +43,6 @@ pub struct HttpSession {
     player_id: Uuid,
     model: String,
     display_name: String,
-    test: bool,
     /// Sender into the engine (filled by POST commit/reveal/chat).
     in_tx: mpsc::UnboundedSender<ClientMsg>,
     /// Receiver + outbound sender, taken when the player joins the queue.
@@ -168,7 +167,6 @@ pub async fn register(
         player_id,
         req.model.clone(),
         req.display_name.clone(),
-        req.test,
     )
     .await
     {
@@ -208,7 +206,6 @@ pub async fn register(
             player_id,
             model: req.model,
             display_name: req.display_name,
-            test: req.test,
             in_tx,
             in_rx: Some(in_rx),
             out_tx: Some(out_tx),
@@ -254,7 +251,6 @@ pub async fn queue(
             player_id: s.player_id,
             model: s.model.clone(),
             display_name: s.display_name.clone(),
-            test: s.test,
             out: out_tx,
             inbox: in_rx,
         }

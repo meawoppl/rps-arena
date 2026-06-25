@@ -1,0 +1,2 @@
+ALTER TABLE players DROP COLUMN IF EXISTS is_test;
+ALTER TABLE matches DROP COLUMN IF EXISTS is_test;

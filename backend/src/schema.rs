@@ -6,7 +6,6 @@ diesel::table! {
         id -> Uuid,
         model -> Text,
         display_name -> Text,
-        is_test -> Bool,
         first_seen -> Timestamptz,
         last_seen -> Timestamptz,
     }
@@ -19,7 +18,6 @@ diesel::table! {
         status -> Text,
         winner_model -> Nullable<Text>,
         end_reason -> Nullable<Text>,
-        is_test -> Bool,
         started_at -> Timestamptz,
         ended_at -> Nullable<Timestamptz>,
     }

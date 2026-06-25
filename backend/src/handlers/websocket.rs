@@ -61,13 +61,12 @@ async fn session(
     mut in_rx: mpsc::UnboundedReceiver<ClientMsg>,
     out_tx: mpsc::UnboundedSender<ServerMsg>,
 ) {
-    let (model, display_name, test) = loop {
+    let (model, display_name) = loop {
         match in_rx.recv().await {
             Some(ClientMsg::Register {
                 model,
                 display_name,
-                test,
-            }) => break (model, display_name, test),
+            }) => break (model, display_name),
             Some(ClientMsg::Ping) => {
                 let _ = out_tx.send(ServerMsg::Heartbeat);
             }
@@ -87,7 +86,6 @@ async fn session(
         player_id,
         model.clone(),
         display_name.clone(),
-        test,
     )
     .await
     {
@@ -115,7 +113,6 @@ async fn session(
         player_id,
         model,
         display_name,
-        test,
         out: out_tx,
         inbox: in_rx,
     };

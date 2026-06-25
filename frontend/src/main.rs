@@ -846,7 +846,6 @@ async fn register_and_queue(name: &str, best_of: u32) -> Result<String, String> 
         &PlayRegisterRequest {
             model: "human".to_string(),
             display_name: name.to_string(),
-            test: false,
         },
     )
     .await?;

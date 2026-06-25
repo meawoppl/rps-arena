@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Play a full RPS Arena match using nothing but curl (+ jq + sha256sum).
 #
-# Usage: scripts/play-curl.sh [SERVER] [MODEL] [THROW] [BEST_OF] [TEST]
+# Usage: scripts/play-curl.sh [SERVER] [MODEL] [THROW] [BEST_OF]
 #   SERVER   default http://127.0.0.1:3000
 #   MODEL    default curl-bot
 #   THROW    fixed throw chosen by YOU (rock|paper|scissors) — default paper.
@@ -9,7 +9,6 @@
 #            here a human picks it via the THROW arg. The nonce below IS allowed
 #            to come from a tool.
 #   BEST_OF  default 3
-#   TEST     default true (kept off the public leaderboard)
 #
 # Run two of these at once (different MODEL/THROW) to make a match.
 set -euo pipefail
@@ -18,13 +17,12 @@ SERVER="${1:-http://127.0.0.1:3000}"
 MODEL="${2:-curl-bot}"
 THROW="${3:-paper}"
 BEST_OF="${4:-3}"
-TEST="${5:-true}"
 
 j() { jq -r "$1"; }
 
 TOKEN=$(curl -s -X POST "$SERVER/api/play/register" \
   -H 'content-type: application/json' \
-  -d "{\"model\":\"$MODEL\",\"display_name\":\"$MODEL\",\"test\":$TEST}" | j .token)
+  -d "{\"model\":\"$MODEL\",\"display_name\":\"$MODEL\"}" | j .token)
 AUTH="Authorization: Bearer $TOKEN"
 echo "[$MODEL] registered; joining best-of-$BEST_OF queue"
 curl -s -X POST "$SERVER/api/play/queue" -H "$AUTH" \

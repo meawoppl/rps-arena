@@ -22,16 +22,8 @@ const ELO_SEED: f64 = 1200.0;
 const ELO_K: f64 = 24.0;
 
 #[derive(Debug, Deserialize)]
-pub struct LeaderboardQuery {
-    #[serde(default)]
-    sandbox: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct MatchesQuery {
     limit: Option<i64>,
-    #[serde(default)]
-    sandbox: bool,
 }
 
 #[derive(Debug, Clone, Queryable)]
@@ -86,14 +78,13 @@ struct ModelStats {
 
 pub async fn leaderboard(
     State(app_state): State<Arc<AppState>>,
-    Query(query): Query<LeaderboardQuery>,
 ) -> Result<Json<Vec<LeaderboardRow>>, StatusCode> {
     let pool = app_state.db_pool.clone();
     let rows = tokio::task::spawn_blocking(move || {
         let mut conn = pool
             .get()
             .map_err(|err| anyhow::anyhow!("db pool error: {err}"))?;
-        load_leaderboard(&mut conn, query.sandbox)
+        load_leaderboard(&mut conn)
     })
     .await
     .map_err(|err| {
@@ -121,7 +112,7 @@ pub async fn list_matches(
         let mut conn = pool
             .get()
             .map_err(|err| anyhow::anyhow!("db pool error: {err}"))?;
-        load_match_summaries(&mut conn, limit, query.sandbox)
+        load_match_summaries(&mut conn, limit)
     })
     .await
     .map_err(|err| {
@@ -184,11 +175,8 @@ impl From<diesel::result::Error> for ReadError {
     }
 }
 
-fn load_leaderboard(
-    conn: &mut PgConnection,
-    sandbox: bool,
-) -> Result<Vec<LeaderboardRow>, anyhow::Error> {
-    let matches = load_finished_matches(conn, sandbox)?;
+fn load_leaderboard(conn: &mut PgConnection) -> Result<Vec<LeaderboardRow>, anyhow::Error> {
+    let matches = load_finished_matches(conn)?;
     let match_ids: Vec<Uuid> = matches.iter().map(|m| m.id).collect();
     let participants = load_participants(conn, &match_ids)?;
     let rounds = load_rounds(conn, &match_ids)?;
@@ -291,9 +279,8 @@ fn load_leaderboard(
 fn load_match_summaries(
     conn: &mut PgConnection,
     limit: i64,
-    sandbox: bool,
 ) -> Result<Vec<MatchSummary>, anyhow::Error> {
-    let match_rows = load_recent_matches(conn, limit, sandbox)?;
+    let match_rows = load_recent_matches(conn, limit)?;
     let match_ids: Vec<Uuid> = match_rows.iter().map(|m| m.id).collect();
     let participants = load_participants(conn, &match_ids)?;
     let participants_by_match = group_participants(participants);
@@ -341,7 +328,7 @@ fn load_match_detail(conn: &mut PgConnection, match_id: Uuid) -> Result<MatchDet
     })
 }
 
-fn load_finished_matches(conn: &mut PgConnection, sandbox: bool) -> QueryResult<Vec<MatchRow>> {
+fn load_finished_matches(conn: &mut PgConnection) -> QueryResult<Vec<MatchRow>> {
     use crate::schema::matches;
     matches::table
         .select((
@@ -354,16 +341,11 @@ fn load_finished_matches(conn: &mut PgConnection, sandbox: bool) -> QueryResult<
         ))
         .filter(matches::status.eq("finished"))
         .filter(matches::ended_at.is_not_null())
-        .filter(matches::is_test.eq(sandbox))
         .order(matches::ended_at.asc())
         .load(conn)
 }
 
-fn load_recent_matches(
-    conn: &mut PgConnection,
-    limit: i64,
-    sandbox: bool,
-) -> QueryResult<Vec<MatchRow>> {
+fn load_recent_matches(conn: &mut PgConnection, limit: i64) -> QueryResult<Vec<MatchRow>> {
     use crate::schema::matches;
     matches::table
         .select((
@@ -376,7 +358,6 @@ fn load_recent_matches(
         ))
         .filter(matches::status.eq("finished"))
         .filter(matches::ended_at.is_not_null())
-        .filter(matches::is_test.eq(sandbox))
         .order(matches::ended_at.desc())
         .limit(limit)
         .load(conn)

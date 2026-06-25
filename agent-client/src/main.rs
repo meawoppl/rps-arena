@@ -35,10 +35,6 @@ struct Args {
     /// Include a short chat line when the match starts.
     #[arg(long)]
     chat: Option<String>,
-
-    /// Mark this client as a sandbox/test agent excluded from public stats.
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    test: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -85,7 +81,6 @@ async fn main() -> anyhow::Result<()> {
     conn.send(ClientMsg::Register {
         model: args.model.clone(),
         display_name: args.display_name.clone(),
-        test: args.test,
     })
     .await
     .context("send Register")?;

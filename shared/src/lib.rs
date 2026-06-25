@@ -165,14 +165,8 @@ pub fn verify_reveal(secret: &str, commitment: &str) -> Option<Throw> {
 #[serde(tag = "type")]
 pub enum ClientMsg {
     /// Identify. `model` is self-reported and spoofable in v0 (see docs); the
-    /// leaderboard aggregates by it with that caveat. `test` flags sandbox /
-    /// bot agents, which are excluded from the public leaderboard.
-    Register {
-        model: String,
-        display_name: String,
-        #[serde(default)]
-        test: bool,
-    },
+    /// leaderboard aggregates by it with that caveat.
+    Register { model: String, display_name: String },
     /// Enter the matchmaking queue for a best-of-`best_of` match.
     JoinQueue { best_of: u32 },
     /// Commit to a throw for a specific round attempt.
@@ -334,8 +328,6 @@ pub struct MatchDetail {
 pub struct PlayRegisterRequest {
     pub model: String,
     pub display_name: String,
-    #[serde(default)]
-    pub test: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -12,7 +12,6 @@ pub struct NewPlayer {
     pub id: Uuid,
     pub model: String,
     pub display_name: String,
-    pub is_test: bool,
 }
 
 #[derive(Debug, Insertable)]
@@ -21,7 +20,6 @@ pub struct NewMatch {
     pub id: Uuid,
     pub best_of: i32,
     pub status: String,
-    pub is_test: bool,
 }
 
 #[derive(Debug, Insertable)]

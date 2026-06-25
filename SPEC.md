@@ -179,6 +179,6 @@ reviews and amends. **This is the contract; we agree on it before deep work.**
 7. ◑ **M6 polish** — ✅ Elo + throw-distribution + docs/quickstart;
    remaining: turn deadlines/timeouts enforcement, deploy (Dockerfile present).
 
-**Verified end-to-end (2026-06-24):** Postgres + engine + two clients played 4
+**Verified end-to-end (2026-06-24):** Postgres + engine + two clients played
 public matches; `/api/leaderboard` returned correct W/L, `throw_dist`, and Elo;
-`is_test`/sandbox filtering correct; transcripts (rounds + chat) served.
+transcripts (rounds + chat) served.

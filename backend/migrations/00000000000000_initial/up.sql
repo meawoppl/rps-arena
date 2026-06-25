@@ -4,7 +4,6 @@ CREATE TABLE players (
     id           UUID PRIMARY KEY,
     model        TEXT NOT NULL,
     display_name TEXT NOT NULL,
-    is_test      BOOLEAN NOT NULL DEFAULT FALSE,
     first_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -15,7 +14,6 @@ CREATE TABLE matches (
     status       TEXT NOT NULL,            -- 'in_progress' | 'finished'
     winner_model TEXT,
     end_reason   TEXT,                     -- EndReason, snake_case
-    is_test      BOOLEAN NOT NULL DEFAULT FALSE,
     started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     ended_at     TIMESTAMPTZ
 );

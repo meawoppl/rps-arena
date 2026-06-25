@@ -23,7 +23,6 @@ pub struct PlayerConn {
     pub player_id: Uuid,
     pub model: String,
     pub display_name: String,
-    pub test: bool,
     pub out: mpsc::UnboundedSender<ServerMsg>,
     pub inbox: mpsc::UnboundedReceiver<ClientMsg>,
 }
@@ -236,7 +235,6 @@ async fn collect_phase(
 /// Drive a full best-of-N match between two players, persisting as it goes.
 pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: PlayerConn) {
     let match_id = Uuid::new_v4();
-    let is_test = a.test || b.test;
     let rules = rules::rules_text(best_of);
     let need = best_of / 2 + 1;
 
@@ -244,7 +242,6 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
         &pool,
         match_id,
         best_of as i32,
-        is_test,
         [
             SeatInfo {
                 seat: 0,

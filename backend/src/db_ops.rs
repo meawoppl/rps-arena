@@ -22,7 +22,6 @@ pub async fn create_player(
     id: Uuid,
     model: String,
     display_name: String,
-    is_test: bool,
 ) -> Result<()> {
     let pool = pool.clone();
     tokio::task::spawn_blocking(move || {
@@ -33,7 +32,6 @@ pub async fn create_player(
                 id,
                 model,
                 display_name,
-                is_test,
             })
             .execute(&mut conn)?;
         Ok(())
@@ -45,7 +43,6 @@ pub async fn create_match(
     pool: &DbPool,
     match_id: Uuid,
     best_of: i32,
-    is_test: bool,
     seats: [SeatInfo; 2],
 ) -> Result<()> {
     let pool = pool.clone();
@@ -58,7 +55,6 @@ pub async fn create_match(
                     id: match_id,
                     best_of,
                     status: "in_progress".to_string(),
-                    is_test,
                 })
                 .execute(conn)?;
             for s in seats {

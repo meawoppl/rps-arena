@@ -440,9 +440,21 @@ tbody tr:last-child td {
 }
 
 .throw-pad {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.throw-buttons {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 10px;
+}
+
+.throw-hint {
+    margin: 0;
+    font-size: 13px;
+    color: #e0af68;
 }
 
 .throw-button {
@@ -559,7 +571,7 @@ tbody tr:last-child td {
     .play-layout,
     .human-setup,
     .scoreboard,
-    .throw-pad {
+    .throw-buttons {
         grid-template-columns: 1fr;
     }
 
@@ -635,4 +647,48 @@ tbody tr:last-child td {
     table {
         min-width: 760px;
     }
+}
+
+.match-result {
+    display: grid;
+    gap: 8px;
+    justify-items: center;
+    text-align: center;
+    padding: 20px;
+    border: 1px solid #303846;
+    border-radius: 10px;
+    background: #111721;
+}
+
+.match-result h2 {
+    margin: 0;
+    font-size: 24px;
+}
+
+.match-result.win {
+    border-color: #9ece6a;
+}
+
+.match-result.loss {
+    border-color: #f7768e;
+}
+
+.match-result.draw {
+    border-color: #e0af68;
+}
+
+.match-result .final-score {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: 2px;
+}
+
+.match-result .reveal {
+    margin: 0;
+    font-size: 15px;
+    color: #e6edf3;
+}
+
+.match-result .reveal::before {
+    content: "\1F575  ";
 }

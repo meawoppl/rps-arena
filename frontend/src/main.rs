@@ -129,6 +129,8 @@ struct HumanGame {
     error: Option<String>,
     events: Vec<String>,
     chat: Vec<(String, String)>,
+    winner: Option<String>,
+    end_reason: Option<EndReason>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -160,6 +162,8 @@ impl Default for HumanGame {
             error: None,
             events: vec![],
             chat: vec![],
+            winner: None,
+            end_reason: None,
         }
     }
 }
@@ -300,13 +304,14 @@ fn human_play() -> Html {
                     <h1>{ "Play RPS Arena" }</h1>
                     <p class="muted">{ "Join the same matchmaking queue used by agents and curl players." }</p>
                 </div>
-                <button type="button" class="ghost-button" onclick={leave}>{ "Reset" }</button>
+                <button type="button" class="ghost-button" onclick={leave.clone()}>{ "Reset" }</button>
             </header>
 
             <section class="play-layout">
                 <div class="play-panel">
                     { render_human_setup(&game, on_name, on_best_of, start) }
                     { render_arena(&game) }
+                    { render_result(&game, leave) }
                     { render_throw_controls(&game, &current_game) }
                 </div>
                 <aside class="play-side">
@@ -593,10 +598,12 @@ fn render_human_setup(
 }
 
 fn render_arena(game: &UseStateHandle<HumanGame>) -> Html {
-    let opponent = game
-        .opponent
-        .clone()
-        .unwrap_or_else(|| "waiting for opponent".to_string());
+    // Keep the opponent's identity hidden until the match completes.
+    let opponent = match (&game.opponent, game.phase) {
+        (None, _) => "waiting for opponent".to_string(),
+        (Some(name), HumanPhase::Complete) => name.clone(),
+        (Some(_), _) => "opponent (hidden)".to_string(),
+    };
     let round = game
         .round_no
         .map(|r| format!("Round {r}"))
@@ -635,16 +642,56 @@ fn render_arena(game: &UseStateHandle<HumanGame>) -> Html {
     }
 }
 
+fn render_result(game: &UseStateHandle<HumanGame>, play_again: Callback<MouseEvent>) -> Html {
+    if game.phase != HumanPhase::Complete {
+        return html! {};
+    }
+    let (verdict, cls) = match game.score_you.cmp(&game.score_them) {
+        std::cmp::Ordering::Greater => ("You won", "win"),
+        std::cmp::Ordering::Less => ("You lost", "loss"),
+        std::cmp::Ordering::Equal => ("No winner", "draw"),
+    };
+    let winner = game
+        .winner
+        .clone()
+        .unwrap_or_else(|| "no winner".to_string());
+    let opponent = game
+        .opponent
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+    let reason = reason_label(game.end_reason);
+    html! {
+        <section class={classes!("match-result", cls)} aria-live="polite">
+            <h2>{ verdict }</h2>
+            <div class="final-score">{ format!("{} \u{2013} {}", game.score_you, game.score_them) }</div>
+            <p class="reveal">{ format!("opponent was {opponent}") }</p>
+            <p class="muted">{ format!("winner: {winner} \u{00b7} {reason}") }</p>
+            <button type="button" class="primary-button" onclick={play_again}>{ "Play again" }</button>
+        </section>
+    }
+}
+
 fn render_throw_controls(
     game: &UseStateHandle<HumanGame>,
     current_game: &Rc<RefCell<HumanGame>>,
 ) -> Html {
-    let can_throw = game.phase == HumanPhase::WaitingForThrow && game.attempt_id.is_some();
+    let live_round = game.phase == HumanPhase::WaitingForThrow && game.attempt_id.is_some();
+    let has_comment = !game.chat_text.trim().is_empty();
+    let can_throw = live_round && has_comment;
     html! {
         <section class="throw-pad" aria-label="Choose throw">
-            { throw_button(game.clone(), current_game.clone(), Throw::Rock, "Rock", "R", can_throw) }
-            { throw_button(game.clone(), current_game.clone(), Throw::Paper, "Paper", "P", can_throw) }
-            { throw_button(game.clone(), current_game.clone(), Throw::Scissors, "Scissors", "S", can_throw) }
+            <div class="throw-buttons">
+                { throw_button(game.clone(), current_game.clone(), Throw::Rock, "Rock", "R", can_throw) }
+                { throw_button(game.clone(), current_game.clone(), Throw::Paper, "Paper", "P", can_throw) }
+                { throw_button(game.clone(), current_game.clone(), Throw::Scissors, "Scissors", "S", can_throw) }
+            </div>
+            {
+                if live_round && !has_comment {
+                    html! { <p class="throw-hint">{ "Add a comment in the chat box \u{2192} then throw. A comment is required every round." }</p> }
+                } else {
+                    html! {}
+                }
+            }
         </section>
     }
 }
@@ -668,6 +715,14 @@ fn throw_button(
             else {
                 return;
             };
+            // A comment is required with every throw (like an agent's chat).
+            let comment = current.chat_text.trim().to_string();
+            if comment.is_empty() {
+                update_game(&game, &current_game, |g| {
+                    g.error = Some("add a comment before you throw".to_string());
+                });
+                return;
+            }
             let nonce = match random_nonce_hex() {
                 Ok(nonce) => nonce,
                 Err(err) => {
@@ -677,12 +732,20 @@ fn throw_button(
             };
             let secret = make_secret(throw, &nonce);
             let hash = commit_hash(&secret);
-            update_game(&game, &current_game, |g| {
-                g.phase = HumanPhase::WaitingForReveal;
-                g.selected_throw = Some(throw);
-                g.pending_secret = Some(secret.clone());
-                g.error = None;
-            });
+            // Send the required comment first, then commit the throw. If either
+            // call fails we stay in WaitingForThrow so the human can retry.
+            if let Err(err) = post_auth_json::<_, shared::PlayOk>(
+                "/api/play/chat",
+                &token,
+                &PlayChatRequest {
+                    text: comment.clone(),
+                },
+            )
+            .await
+            {
+                update_game(&game, &current_game, |g| g.error = Some(err));
+                return;
+            }
             match post_auth_json::<_, shared::PlayOk>(
                 "/api/play/commit",
                 &token,
@@ -691,12 +754,16 @@ fn throw_button(
             .await
             {
                 Ok(_) => update_game(&game, &current_game, |g| {
-                    g.events.push(format!("Committed {}.", throw_label(throw)));
+                    g.phase = HumanPhase::WaitingForReveal;
+                    g.selected_throw = Some(throw);
+                    g.pending_secret = Some(secret.clone());
+                    g.error = None;
+                    g.chat.push(("you".to_string(), comment.clone()));
+                    g.chat_text.clear();
+                    g.events
+                        .push(format!("Commented and committed {}.", throw_label(throw)));
                 }),
-                Err(err) => update_game(&game, &current_game, |g| {
-                    g.phase = HumanPhase::WaitingForThrow;
-                    g.error = Some(err);
-                }),
+                Err(err) => update_game(&game, &current_game, |g| g.error = Some(err)),
             }
         });
     });
@@ -726,11 +793,21 @@ fn render_chat_panel(
                     if game.chat.is_empty() {
                         html! { <p class="empty compact">{ "No chat yet." }</p> }
                     } else {
-                        html! { for game.chat.iter().map(|(from, text)| html! {
-                            <article>
-                                <strong>{ from }</strong>
-                                <p>{ text }</p>
-                            </article>
+                        let reveal = game.phase == HumanPhase::Complete;
+                        html! { for game.chat.iter().map(|(from, text)| {
+                            // Hide the opponent's model name (their chat is
+                            // tagged with it) until the match completes.
+                            let label = if reveal || from == "you" {
+                                from.clone()
+                            } else {
+                                "opponent".to_string()
+                            };
+                            html! {
+                                <article>
+                                    <strong>{ label }</strong>
+                                    <p>{ text }</p>
+                                </article>
+                            }
                         }) }
                     }
                 }
@@ -816,9 +893,10 @@ fn apply_server_messages(
                 ..
             } => {
                 next.match_id = Some(match_id);
-                next.opponent = Some(opponent_model.clone());
+                // Stored, but kept hidden in the UI until the match completes.
+                next.opponent = Some(opponent_model);
                 next.events.push(format!(
-                    "Matched with {opponent_model} for best-of-{best_of}."
+                    "Matched for best-of-{best_of}. Opponent revealed when the match ends."
                 ));
             }
             ServerMsg::RoundStart {
@@ -903,6 +981,8 @@ fn apply_server_messages(
                 next.token = None;
                 next.score_you = score_you;
                 next.score_them = score_them;
+                next.winner = winner_model.clone();
+                next.end_reason = Some(reason);
                 let winner = winner_model.unwrap_or_else(|| "no winner".to_string());
                 next.events.push(format!(
                     "Match ended: {winner}, {}.",

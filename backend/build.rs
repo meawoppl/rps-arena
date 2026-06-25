@@ -29,4 +29,24 @@ fn main() {
         )
         .expect("write ../frontend/dist/index.html placeholder");
     }
+
+    // Emit the short git SHA so /api/health can report exactly what this binary
+    // was built from. Falls back to "unknown" outside a git checkout (e.g. a
+    // source tarball).
+    let git_sha = std::process::Command::new("git")
+        .args(["rev-parse", "--short=12", "HEAD"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=GIT_SHA={git_sha}");
+
+    // Rebuild when HEAD moves so the reported SHA stays accurate. (Guarded so a
+    // missing .git doesn't force an unconditional rebuild every time.)
+    if Path::new("../.git/HEAD").exists() {
+        println!("cargo:rerun-if-changed=../.git/HEAD");
+    }
 }

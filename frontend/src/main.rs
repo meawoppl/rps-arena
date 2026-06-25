@@ -502,10 +502,10 @@ fn render_match_detail(detail: &MatchDetail) -> Html {
 
             <section class="section">
                 <div class="section-heading">
-                    <h2>{ "Chat" }</h2>
-                    <span class="untrusted">{ "Untrusted peer text" }</span>
+                    <h2>{ "Messages" }</h2>
+                    <span class="untrusted">{ format!("{} recorded", detail.chat.len()) }</span>
                 </div>
-                { render_chat(&detail.chat) }
+                { render_messages(&detail.chat) }
             </section>
         </>
     }
@@ -548,18 +548,18 @@ fn render_round(round: &RoundRecord, summary: &MatchSummary) -> Html {
     }
 }
 
-fn render_chat(chat: &[ChatRecord]) -> Html {
-    if chat.is_empty() {
-        return html! { <div class="empty">{"No chat messages recorded."}</div> };
+fn render_messages(messages: &[ChatRecord]) -> Html {
+    if messages.is_empty() {
+        return html! { <div class="empty">{"No messages recorded."}</div> };
     }
 
     html! {
-        <div class="chat-log">
-            { for chat.iter().map(|line| html! {
-                <article class="chat-line">
+        <div class="message-log">
+            { for messages.iter().map(|line| html! {
+                <article class="message-line">
                     <header>
                         <span class="model">{ &line.from_model }</span>
-                        <span class="muted">{ chat_meta(line) }</span>
+                        <span class="muted">{ message_meta(line) }</span>
                     </header>
                     <p>{ &line.text }</p>
                 </article>
@@ -785,13 +785,13 @@ fn render_chat_panel(
     html! {
         <section class="side-section">
             <div class="section-heading">
-                <h2>{ "Chat" }</h2>
+                <h2>{ "Messages" }</h2>
                 <span class="untrusted">{ "Untrusted" }</span>
             </div>
             <div class="live-chat">
                 {
                     if game.chat.is_empty() {
-                        html! { <p class="empty compact">{ "No chat yet." }</p> }
+                        html! { <p class="empty compact">{ "No messages yet." }</p> }
                     } else {
                         let reveal = game.phase == HumanPhase::Complete;
                         html! { for game.chat.iter().map(|(from, text)| {
@@ -815,7 +815,7 @@ fn render_chat_panel(
             <div class="chat-compose">
                 <input
                     type="text"
-                    placeholder="Send a comment"
+                    placeholder="Send a message"
                     value={game.chat_text.clone()}
                     oninput={on_chat_input}
                     disabled={disabled}
@@ -1075,9 +1075,6 @@ fn trim_live_match_state(game: &mut HumanGame) {
     if game.events.len() > 100 {
         game.events.drain(..game.events.len() - 100);
     }
-    if game.chat.len() > 200 {
-        game.chat.drain(..game.chat.len() - 200);
-    }
 }
 
 fn phase_label(phase: HumanPhase) -> &'static str {
@@ -1179,7 +1176,7 @@ fn time_label(time: Option<chrono::DateTime<chrono::Utc>>) -> String {
         .unwrap_or_else(|| "in progress".to_string())
 }
 
-fn chat_meta(line: &ChatRecord) -> String {
+fn message_meta(line: &ChatRecord) -> String {
     match line.round_no {
         Some(round) => format!(
             "round {} · {}",

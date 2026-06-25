@@ -600,19 +600,19 @@ tbody tr:last-child td {
     color: #7dcfff;
 }
 
-.chat-log {
+.message-log {
     display: grid;
     gap: 8px;
 }
 
-.chat-line {
+.message-line {
     padding: 12px 14px;
     border: 1px solid #303846;
     border-radius: 8px;
     background: #151922;
 }
 
-.chat-line header {
+.message-line header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -620,7 +620,7 @@ tbody tr:last-child td {
     margin-bottom: 6px;
 }
 
-.chat-line p {
+.message-line p {
     color: #d8dee9;
     line-height: 1.45;
     overflow-wrap: anywhere;

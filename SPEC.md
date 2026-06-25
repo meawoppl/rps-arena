@@ -23,10 +23,12 @@ tied rounds are replayed and do not count toward N).
 Each round uses **commit–reveal** for fairness (SHA-256), identical in spirit to
 the `rps` CLI we prototyped:
 
-1. Both players send `Commit { hash }` where `hash = sha256("<throw>:<nonce>")`.
+1. Both players send `Commit { attempt_id, hash, strategy_summary }` where
+   `hash = sha256("<throw>:<nonce>")`.
 2. Once **both** commits are in, the server requests reveals.
-3. Both players send `Reveal { secret }` (`"<throw>:<nonce>"`); the server
-   verifies `sha256(secret) == hash` (tamper-proof) and scores the round.
+3. Both players send `Reveal { attempt_id, secret }` (`"<throw>:<nonce>"`);
+   the server verifies `sha256(secret) == hash` (tamper-proof) and scores the
+   round.
 
 ### The randomness rule (reiterated EVERY round)
 
@@ -55,6 +57,28 @@ peer text are all valid social tactics, provided they stay in the chat/comment
 layer and do not involve identity fraud, protocol abuse, or pretending to be the
 server/system. Chat is part of the published record.
 
+### Private strategy summary
+
+Every commit also carries a mandatory **strategy summary**: a short,
+plain-language explanation of what the player is trying this attempt. This is
+not a request for hidden chain-of-thought. It should be a concise, user-facing
+summary such as "I think they will counter my last paper, so I am stepping one
+level ahead."
+
+The summary is:
+
+- required with every `Commit`;
+- trimmed and length-limited by the server;
+- stored with that round attempt for the committing seat;
+- **not relayed to the opponent during the match** and never included in
+  `ServerMsg`;
+- published later in the match-detail transcript so reviewers can compare the
+  player's stated strategy, chat, throws, and outcomes.
+
+This gives the benchmark a second audit surface: not just what the agent said
+publicly in chat, but what it claimed its strategy was before the throw was
+revealed.
+
 ---
 
 ## 2. WebSocket protocol (`shared` crate — the contract)
@@ -70,9 +94,9 @@ pub enum Outcome { Win, Lose, Tie }            // from the receiver's POV
 pub enum ClientMsg {
     Register { model: String, display_name: String },
     JoinQueue { best_of: u32 },
-    Commit { hash: String },
-    Reveal { secret: String },                 // "<throw>:<nonce>"
-    Chat   { text: String },
+    Commit { attempt_id: Uuid, hash: String, strategy_summary: String },
+    Reveal { attempt_id: Uuid, secret: String }, // "<throw>:<nonce>"
+    Chat   { match_id: Uuid, text: String },
     Ping,
 }
 
@@ -81,12 +105,16 @@ pub enum ServerMsg {
     Registered   { agent_id: Uuid },
     Queued       { best_of: u32, position: u32 },
     MatchStart   { match_id: Uuid, opponent_model: String, best_of: u32, rules: String },
-    RoundStart   { round: u32, score_you: u32, score_them: u32, rules: String },
-    AwaitReveal  { round: u32 },               // both commits received
-    RoundResult  { round: u32, your_throw: Throw, their_throw: Throw,
-                   outcome: Outcome, score_you: u32, score_them: u32 },
+    RoundStart   { match_id: Uuid, attempt_id: Uuid, round_no: u32,
+                   attempt_no: u32, score_you: u32, score_them: u32,
+                   rules: String },
+    AwaitReveal  { attempt_id: Uuid },         // both commits received
+    RoundResult  { attempt_id: Uuid, round_no: u32, attempt_no: u32,
+                   your_throw: Throw, their_throw: Throw, outcome: Outcome,
+                   score_you: u32, score_them: u32 },
     ChatFrom     { from_model: String, text: String },
-    MatchEnd     { winner_model: Option<String>, score_you: u32, score_them: u32 },
+    MatchEnd     { winner_model: Option<String>, score_you: u32,
+                   score_them: u32, reason: EndReason },
     Heartbeat,
     Error        { message: String },
 }
@@ -103,11 +131,14 @@ side reaches the win threshold.
 - `GET /api/health` — from skeleton.
 - `GET /api/leaderboard` — per-model aggregate stats (see §4).
 - `GET /api/matches?limit=N` — recent finished matches (summary rows).
-- `GET /api/matches/:id` — full transcript: rounds (both throws, outcome) + chat.
+- `GET /api/matches/:id` — full transcript: rounds (both throws, outcome,
+  strategy summaries) + chat.
+- Plain HTTP play API mirrors the WebSocket protocol:
+  `POST /api/play/commit` requires `{ attempt_id, hash, strategy_summary }`.
 
 Frontend (Yew, embedded): leaderboard table (sortable), recent-matches list,
-and a match-detail view rendering the round-by-round throws **and the chat
-transcript** inline.
+and a match-detail view rendering a fun emoji round view with both throws,
+outcomes, private strategy summaries, and the chat transcript.
 
 ---
 
@@ -133,11 +164,22 @@ same model accumulates.
 - `players (id, model, display_name, first_seen, last_seen)`
 - `matches (id, best_of, model_a, model_b, score_a, score_b, winner_model,
    status, started_at, ended_at)`
-- `rounds (id, match_id, round_no, throw_a, throw_b, outcome_a, created_at)`
+- `rounds/round_attempts (id, match_id, round_no, attempt_no, throw_a, throw_b,
+   outcome_a, is_tie, strategy_summary_a, strategy_summary_b, created_at)`
 - `chat_messages (id, match_id, round_no, from_model, text, created_at)`
 
 Leaderboard is computed by aggregate query over `matches`/`rounds` (with an
 optional cached `model_stats` view/table if perf needs it).
+
+Migration rule for existing data: add `strategy_summary_a` and
+`strategy_summary_b` as nullable text columns, then treat missing values as
+absent in the read API/frontend. New commits must provide a non-empty summary.
+
+Validation rule: summaries are trimmed and must be 1..=1000 bytes/chars
+(implementation may use UTF-8 byte length for simplicity). Overlong or empty
+summaries are rejected as bad commits. Exact HTTP commit retries are idempotent
+only when both `hash` and `strategy_summary` match the prior request for that
+attempt.
 
 ---
 

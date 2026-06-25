@@ -36,6 +36,14 @@ const OUTBOX_CAP: usize = 512;
 const IDLE_TTL: Duration = Duration::from_secs(600);
 /// Max chat length accepted over HTTP.
 const MAX_CHAT_LEN: usize = 2000;
+/// Max strategy summary length accepted over HTTP/WebSocket commits.
+const MAX_STRATEGY_SUMMARY_LEN: usize = 1000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommitReceipt {
+    hash: String,
+    strategy_summary: String,
+}
 
 /// Server-side state for one HTTP player.
 pub struct HttpSession {
@@ -51,7 +59,7 @@ pub struct HttpSession {
     /// Buffered server→player messages, drained by `poll`.
     outbox: Arc<Mutex<VecDeque<ServerMsg>>>,
     notify: Arc<Notify>,
-    committed: HashMap<Uuid, String>,
+    committed: HashMap<Uuid, CommitReceipt>,
     revealed: HashMap<Uuid, String>,
     queued: bool,
     last_seen: Instant,
@@ -144,6 +152,15 @@ fn idempotency_of(prior: Option<&String>, incoming: &str) -> Idempotency {
 fn validate_chat(raw: &str) -> Option<&str> {
     let text = raw.trim();
     if text.is_empty() || text.len() > MAX_CHAT_LEN {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn validate_strategy_summary(raw: &str) -> Option<&str> {
+    let text = raw.trim();
+    if text.is_empty() || text.len() > MAX_STRATEGY_SUMMARY_LEN {
         None
     } else {
         Some(text)
@@ -283,15 +300,28 @@ pub async fn commit(
 ) -> Result<Json<PlayOk>, (StatusCode, Json<PlayError>)> {
     let token = token_of(&headers, q.token)
         .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
+    let strategy_summary = validate_strategy_summary(&req.strategy_summary)
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "strategy_summary required"))?
+        .to_string();
+    let incoming = CommitReceipt {
+        hash: req.hash.clone(),
+        strategy_summary: strategy_summary.clone(),
+    };
     {
         let mut sessions = app.http_sessions.lock().await;
         let s = sessions
             .get_mut(&token)
             .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unknown token"))?;
         s.last_seen = Instant::now();
-        // Idempotent only for an exact retry. A different hash for the same
-        // attempt means the client is trying to change a locked commitment.
-        match idempotency_of(s.committed.get(&req.attempt_id), &req.hash) {
+        // Idempotent only for an exact retry. A different hash or summary for
+        // the same attempt means the client is trying to change locked commit
+        // metadata.
+        let idempotency = match s.committed.get(&req.attempt_id) {
+            Some(existing) if existing == &incoming => Idempotency::Duplicate,
+            Some(_) => Idempotency::Conflict,
+            None => Idempotency::Fresh,
+        };
+        match idempotency {
             Idempotency::Duplicate => return Ok(Json(PlayOk { ok: true })),
             Idempotency::Conflict => {
                 return Err(err(
@@ -305,9 +335,10 @@ pub async fn commit(
             .send(ClientMsg::Commit {
                 attempt_id: req.attempt_id,
                 hash: req.hash.clone(),
+                strategy_summary,
             })
             .map_err(|_| err(StatusCode::BAD_REQUEST, "match not active"))?;
-        s.committed.insert(req.attempt_id, req.hash);
+        s.committed.insert(req.attempt_id, incoming);
     }
     Ok(Json(PlayOk { ok: true }))
 }

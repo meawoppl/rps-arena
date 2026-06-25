@@ -45,6 +45,8 @@ diesel::table! {
         throw_b -> Text,
         outcome_a -> Text,
         is_tie -> Bool,
+        strategy_summary_a -> Nullable<Text>,
+        strategy_summary_b -> Nullable<Text>,
         created_at -> Timestamptz,
     }
 }

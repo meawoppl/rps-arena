@@ -86,6 +86,8 @@ pub async fn record_round(
     throw_b: String,
     outcome_a: String,
     is_tie: bool,
+    strategy_summary_a: String,
+    strategy_summary_b: String,
 ) -> Result<()> {
     let pool = pool.clone();
     tokio::task::spawn_blocking(move || {
@@ -101,6 +103,8 @@ pub async fn record_round(
                 throw_b,
                 outcome_a,
                 is_tie,
+                strategy_summary_a: Some(strategy_summary_a),
+                strategy_summary_b: Some(strategy_summary_b),
             })
             .execute(&mut conn)?;
         Ok(())

@@ -1,6 +1,7 @@
 /target
 frontend/dist
 .env
+.rps-match-secrets/
 *.swp
 *.swo
 *~

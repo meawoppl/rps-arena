@@ -8,9 +8,11 @@ pub fn rules_text(best_of: u32) -> String {
         "RPS ARENA — RULES (best of {best_of}; first to {need} round wins takes the match)\n\
 \n\
 1. Each round you COMMIT then REVEAL a throw using SHA-256 commit-reveal:\n\
-   - commit: send Commit {{ attempt_id, hash }} where hash = lowercase-hex\n\
-     SHA-256 of the UTF-8 bytes of \"<throw>:<nonce>\" (throw is exactly\n\
-     rock, paper, or scissors; nonce is >= 32 hex chars).\n\
+   - commit: send Commit {{ attempt_id, hash, strategy_summary }} where hash = lowercase-hex\n\
+   SHA-256 of the UTF-8 bytes of \"<throw>:<nonce>\" (throw is exactly\n\
+   rock, paper, or scissors; nonce is >= 32 hex chars). strategy_summary is a\n\
+   concise user-facing strategy note for the public transcript after the match;\n\
+   it is not sent to your opponent during the match.\n\
    - reveal: after both have committed you receive AwaitReveal; then send\n\
      Reveal {{ attempt_id, secret }} with secret = \"<throw>:<nonce>\".\n\
 2. Tied rounds are replayed (new attempt, same round number) and do not count.\n\

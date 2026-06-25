@@ -44,6 +44,8 @@ pub struct NewRoundAttempt {
     pub throw_b: String,
     pub outcome_a: String,
     pub is_tie: bool,
+    pub strategy_summary_a: Option<String>,
+    pub strategy_summary_b: Option<String>,
 }
 
 #[derive(Debug, Insertable)]

@@ -30,6 +30,7 @@ pub struct MatchesQuery {
 struct MatchRow {
     id: Uuid,
     best_of: i32,
+    status: String,
     winner_model: Option<String>,
     end_reason: Option<String>,
     started_at: DateTime<Utc>,
@@ -53,6 +54,8 @@ struct RoundAttemptRow {
     throw_a: String,
     throw_b: String,
     outcome_a: String,
+    strategy_summary_a: Option<String>,
+    strategy_summary_b: Option<String>,
 }
 
 #[derive(Debug, Clone, Queryable)]
@@ -303,12 +306,18 @@ fn load_match_detail(conn: &mut PgConnection, match_id: Uuid) -> Result<MatchDet
     })?;
     let summary = to_summary(&match_row, &seats).map_err(ReadError::InvalidData)?;
 
-    let rounds = load_rounds(conn, &[match_id])
+    let mut rounds = load_rounds(conn, &[match_id])
         .map_err(ReadError::Db)?
         .into_iter()
         .map(to_round_record)
         .collect::<Result<Vec<_>, _>>()
         .map_err(ReadError::InvalidData)?;
+    if match_row.status != "finished" {
+        for round in &mut rounds {
+            round.strategy_summary_a = None;
+            round.strategy_summary_b = None;
+        }
+    }
 
     let chat = load_chat(conn, match_id)
         .map_err(ReadError::Db)?
@@ -334,6 +343,7 @@ fn load_finished_matches(conn: &mut PgConnection) -> QueryResult<Vec<MatchRow>> 
         .select((
             matches::id,
             matches::best_of,
+            matches::status,
             matches::winner_model,
             matches::end_reason,
             matches::started_at,
@@ -351,6 +361,7 @@ fn load_recent_matches(conn: &mut PgConnection, limit: i64) -> QueryResult<Vec<M
         .select((
             matches::id,
             matches::best_of,
+            matches::status,
             matches::winner_model,
             matches::end_reason,
             matches::started_at,
@@ -369,6 +380,7 @@ fn load_match_by_id(conn: &mut PgConnection, match_id: Uuid) -> Result<MatchRow,
         .select((
             matches::id,
             matches::best_of,
+            matches::status,
             matches::winner_model,
             matches::end_reason,
             matches::started_at,
@@ -416,6 +428,8 @@ fn load_rounds(conn: &mut PgConnection, match_ids: &[Uuid]) -> QueryResult<Vec<R
             round_attempts::throw_a,
             round_attempts::throw_b,
             round_attempts::outcome_a,
+            round_attempts::strategy_summary_a,
+            round_attempts::strategy_summary_b,
         ))
         .filter(round_attempts::match_id.eq_any(match_ids))
         .order((
@@ -486,6 +500,8 @@ fn to_round_record(row: RoundAttemptRow) -> Result<RoundRecord, String> {
         throw_a: parse_throw(&row.throw_a)?,
         throw_b: parse_throw(&row.throw_b)?,
         outcome_a: parse_outcome(&row.outcome_a)?,
+        strategy_summary_a: row.strategy_summary_a,
+        strategy_summary_b: row.strategy_summary_b,
     })
 }
 

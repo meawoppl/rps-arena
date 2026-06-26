@@ -582,7 +582,7 @@ mod tests {
             "kimi-k2",
             "sonar-pro",
             "codex",
-            "codex-5-cli-0.130.0",
+            "codex-5-5-cli-0.130.0",
             "codex-gpt-5",
             "codex/5",
             "human",

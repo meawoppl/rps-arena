@@ -36,6 +36,10 @@ use crate::{db_ops, AppState};
 
 /// Max buffered server messages per HTTP session before we cut it loose.
 const OUTBOX_CAP: usize = 512;
+/// Max client->engine messages buffered per HTTP session.
+const ENGINE_INBOX_CAP: usize = 128;
+/// Max engine->HTTP bridge messages buffered before the outbox task drains them.
+const ENGINE_OUTBOX_CAP: usize = 128;
 /// Idle session TTL (no requests for this long → reaped).
 const IDLE_TTL: Duration = Duration::from_secs(600);
 /// Minimum interval between accepted commits — at most one turn per second
@@ -55,10 +59,10 @@ pub struct HttpSession {
     model: String,
     display_name: String,
     /// Sender into the engine (filled by POST commit/reveal/chat).
-    in_tx: mpsc::UnboundedSender<ClientMsg>,
+    in_tx: mpsc::Sender<ClientMsg>,
     /// Receiver + outbound sender, taken when the player joins the queue.
-    in_rx: Option<mpsc::UnboundedReceiver<ClientMsg>>,
-    out_tx: Option<mpsc::UnboundedSender<ServerMsg>>,
+    in_rx: Option<mpsc::Receiver<ClientMsg>>,
+    out_tx: Option<mpsc::Sender<ServerMsg>>,
     /// Buffered server→player messages, drained by `poll`.
     outbox: Arc<Mutex<VecDeque<ServerMsg>>>,
     notify: Arc<Notify>,
@@ -167,8 +171,8 @@ pub async fn register(
         tracing::warn!("create_player failed: {e}");
     }
 
-    let (in_tx, in_rx) = mpsc::unbounded_channel::<ClientMsg>();
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<ServerMsg>();
+    let (in_tx, in_rx) = mpsc::channel::<ClientMsg>(ENGINE_INBOX_CAP);
+    let (out_tx, mut out_rx) = mpsc::channel::<ServerMsg>(ENGINE_OUTBOX_CAP);
     let outbox = Arc::new(Mutex::new(VecDeque::new()));
     let notify = Arc::new(Notify::new());
     let token = Uuid::new_v4();
@@ -267,9 +271,13 @@ async fn forward(
     let s = sessions
         .get(&token)
         .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unknown token"))?;
-    s.in_tx
-        .send(msg)
-        .map_err(|_| err(StatusCode::BAD_REQUEST, "match not active"))
+    s.in_tx.try_send(msg).map_err(|send_err| {
+        if matches!(send_err, mpsc::error::TrySendError::Full(_)) {
+            err(StatusCode::TOO_MANY_REQUESTS, "match input queue full")
+        } else {
+            err(StatusCode::BAD_REQUEST, "match not active")
+        }
+    })
 }
 
 pub async fn commit(
@@ -326,12 +334,18 @@ pub async fn commit(
             ));
         }
         s.in_tx
-            .send(ClientMsg::Commit {
+            .try_send(ClientMsg::Commit {
                 attempt_id: req.attempt_id,
                 hash: req.hash.clone(),
                 strategy_summary,
             })
-            .map_err(|_| err(StatusCode::BAD_REQUEST, "match not active"))?;
+            .map_err(|send_err| {
+                if matches!(send_err, mpsc::error::TrySendError::Full(_)) {
+                    err(StatusCode::TOO_MANY_REQUESTS, "match input queue full")
+                } else {
+                    err(StatusCode::BAD_REQUEST, "match not active")
+                }
+            })?;
         s.last_commit_at = Some(Instant::now());
         s.committed.insert(req.attempt_id, incoming);
     }
@@ -367,11 +381,17 @@ pub async fn reveal(
             Idempotency::Fresh => {}
         }
         s.in_tx
-            .send(ClientMsg::Reveal {
+            .try_send(ClientMsg::Reveal {
                 attempt_id: req.attempt_id,
                 secret: req.secret.clone(),
             })
-            .map_err(|_| err(StatusCode::BAD_REQUEST, "match not active"))?;
+            .map_err(|send_err| {
+                if matches!(send_err, mpsc::error::TrySendError::Full(_)) {
+                    err(StatusCode::TOO_MANY_REQUESTS, "match input queue full")
+                } else {
+                    err(StatusCode::BAD_REQUEST, "match not active")
+                }
+            })?;
         s.revealed.insert(req.attempt_id, req.secret);
     }
     Ok(Json(PlayOk { ok: true }))

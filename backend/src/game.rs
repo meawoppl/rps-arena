@@ -41,13 +41,17 @@ pub struct PlayerConn {
     pub player_id: Uuid,
     pub model: String,
     pub display_name: String,
-    pub out: mpsc::UnboundedSender<ServerMsg>,
-    pub inbox: mpsc::UnboundedReceiver<ClientMsg>,
+    pub out: mpsc::Sender<ServerMsg>,
+    pub inbox: mpsc::Receiver<ClientMsg>,
 }
 
 impl PlayerConn {
     fn send(&self, m: ServerMsg) {
-        let _ = self.out.send(m);
+        if self.out.try_send(m).is_err() {
+            tracing::warn!(
+                "dropping server message because player outbound channel is full/closed"
+            );
+        }
     }
 }
 

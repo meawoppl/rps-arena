@@ -1,13 +1,21 @@
 use std::sync::Arc;
 
-use axum::routing::MethodRouter;
+use axum::{
+    extract::ws::WebSocketUpgrade,
+    response::Response,
+    routing::{self, MethodRouter},
+};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use shared::{AgentSocket, AllowedModelNames, ClientMsg, ServerMsg};
 
+use crate::client_ip::ClientIp;
 use crate::game::{self, PlayerConn};
 use crate::{db_ops, AppState};
+
+const ENGINE_INBOX_CAP: usize = 128;
+const ENGINE_OUTBOX_CAP: usize = 128;
 
 /// WebSocket route handler for [`AgentSocket`].
 ///
@@ -15,13 +23,21 @@ use crate::{db_ops, AppState};
 /// socket to a pair of channels, plus a [`session`] task that handles the
 /// register/queue handshake and then hands the player to the [`game::Matchmaker`].
 pub fn handler(state: Arc<AppState>) -> MethodRouter {
-    ws_bridge::server::handler::<AgentSocket, _, _>(move |mut conn| {
+    routing::get(
+        move |ws: WebSocketUpgrade, ClientIp(ip): ClientIp| async move {
+            handle_upgrade(ws, state.clone(), ip)
+        },
+    )
+}
+
+fn handle_upgrade(ws: WebSocketUpgrade, state: Arc<AppState>, ip: std::net::IpAddr) -> Response {
+    ws_bridge::server::upgrade::<AgentSocket, _, _>(ws, move |mut conn| {
         let state = state.clone();
         async move {
-            let (in_tx, in_rx) = mpsc::unbounded_channel::<ClientMsg>();
-            let (out_tx, mut out_rx) = mpsc::unbounded_channel::<ServerMsg>();
+            let (in_tx, in_rx) = mpsc::channel::<ClientMsg>(ENGINE_INBOX_CAP);
+            let (out_tx, mut out_rx) = mpsc::channel::<ServerMsg>(ENGINE_OUTBOX_CAP);
 
-            tokio::spawn(session(state, in_rx, out_tx));
+            tokio::spawn(session(state, Some(ip), in_rx, out_tx));
 
             // Bridge: socket <-> channels. Ends when either side closes.
             loop {
@@ -36,7 +52,12 @@ pub fn handler(state: Arc<AppState>) -> MethodRouter {
                     },
                     inc = conn.recv() => match inc {
                         Some(Ok(m)) => {
-                            if in_tx.send(m).is_err() {
+                            if in_tx.try_send(m).is_err() {
+                                let _ = conn
+                                    .send(ServerMsg::Error {
+                                        message: "websocket input queue full".into(),
+                                    })
+                                    .await;
                                 break;
                             }
                         }
@@ -58,8 +79,9 @@ pub fn handler(state: Arc<AppState>) -> MethodRouter {
 /// Handshake: wait for `Register`, then `JoinQueue`, then enqueue for a match.
 async fn session(
     state: Arc<AppState>,
-    mut in_rx: mpsc::UnboundedReceiver<ClientMsg>,
-    out_tx: mpsc::UnboundedSender<ServerMsg>,
+    ip: Option<std::net::IpAddr>,
+    mut in_rx: mpsc::Receiver<ClientMsg>,
+    out_tx: mpsc::Sender<ServerMsg>,
 ) {
     let (model, display_name) = loop {
         match in_rx.recv().await {
@@ -70,7 +92,7 @@ async fn session(
                 let model = match AllowedModelNames::normalize(&model) {
                     Ok(model) => model,
                     Err(err) => {
-                        let _ = out_tx.send(ServerMsg::Error {
+                        let _ = out_tx.try_send(ServerMsg::Error {
                             message: format!(
                                 "{}; {}",
                                 err.message(),
@@ -84,7 +106,7 @@ async fn session(
                 {
                     Ok(display_name) => display_name,
                     Err(err) => {
-                        let _ = out_tx.send(ServerMsg::Error {
+                        let _ = out_tx.try_send(ServerMsg::Error {
                             message: err.message().into(),
                         });
                         continue;
@@ -93,10 +115,10 @@ async fn session(
                 break (model, display_name);
             }
             Some(ClientMsg::Ping) => {
-                let _ = out_tx.send(ServerMsg::Heartbeat);
+                let _ = out_tx.try_send(ServerMsg::Heartbeat);
             }
             Some(_) => {
-                let _ = out_tx.send(ServerMsg::Error {
+                let _ = out_tx.try_send(ServerMsg::Error {
                     message: "send Register first".into(),
                 });
             }
@@ -116,16 +138,16 @@ async fn session(
     {
         tracing::warn!("create_player failed: {e}");
     }
-    let _ = out_tx.send(ServerMsg::Registered { agent_id });
+    let _ = out_tx.try_send(ServerMsg::Registered { agent_id });
 
     let best_of = loop {
         match in_rx.recv().await {
             Some(ClientMsg::JoinQueue { best_of }) => break game::sanitize_best_of(best_of),
             Some(ClientMsg::Ping) => {
-                let _ = out_tx.send(ServerMsg::Heartbeat);
+                let _ = out_tx.try_send(ServerMsg::Heartbeat);
             }
             Some(_) => {
-                let _ = out_tx.send(ServerMsg::Error {
+                let _ = out_tx.try_send(ServerMsg::Error {
                     message: "send JoinQueue to enter matchmaking".into(),
                 });
             }
@@ -141,8 +163,5 @@ async fn session(
         out: out_tx,
         inbox: in_rx,
     };
-    // TODO(#32): thread the real client IP here once ws_bridge exposes request
-    // extensions (Codex's ClientIp). Until then WS players are matched without
-    // the per-IP self-pairing/concurrency guard; HTTP players are covered.
-    state.matchmaker.enqueue(best_of, None, player).await;
+    state.matchmaker.enqueue(best_of, ip, player).await;
 }

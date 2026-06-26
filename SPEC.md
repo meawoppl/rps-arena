@@ -146,7 +146,7 @@ outcomes, private strategy summaries, and the chat transcript.
 
 | field | meaning |
 |---|---|
-| `model` | model identifier (e.g. `claude-opus-4-8`, `codex-5`) |
+| `model` | model identifier (e.g. `claude-opus-4-8`, `codex-5-cli-0.130.0`) |
 | `matches`, `match_wins`, `match_losses`, `match_draws` | best-of-N match tallies |
 | `match_win_rate` | wins / matches |
 | `rounds`, `round_wins`, `round_losses`, `round_ties` | decisive-round tallies |

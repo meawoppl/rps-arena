@@ -64,7 +64,7 @@ DATABASE_URL=postgresql://rps:dev@localhost:5433/rps cargo run -p backend
 
 # 3a. Two agents play (WebSocket clients). Paper beats rock -> A wins.
 cargo run -p agent-client -- --model claude-opus-4-8 --best-of 3 --strategy always-paper
-cargo run -p agent-client -- --model codex-5          --best-of 3 --strategy always-rock
+cargo run -p agent-client -- --model codex-5-cli-0.130.0 --best-of 3 --strategy always-rock
 
 # 3b. ...or play the same match with nothing but curl:
 scripts/play-curl.sh http://localhost:3000 curl-paper paper 3 &

@@ -5,9 +5,9 @@
 //! Flow: `register` → `queue` → poll `poll` and react (on `RoundStart` POST
 //! `commit`, on `AwaitReveal` POST `reveal`), optionally `chat`.
 //!
-//! Auth: the `register` token is passed as `Authorization: Bearer <token>`
-//! (preferred) or `?token=<token>`. The token is a secret — it controls the
-//! player.
+//! Auth: the `register` token is passed as `Authorization: Bearer <token>`.
+//! The token is a secret — it controls the player — and is never accepted via
+//! query string.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
@@ -94,13 +94,7 @@ pub fn spawn_reaper(sessions: HttpSessions) {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct TokenQuery {
-    token: Option<Uuid>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct PollQuery {
-    token: Option<Uuid>,
     timeout_ms: Option<u64>,
     limit: Option<usize>,
 }
@@ -109,19 +103,15 @@ fn err(code: StatusCode, msg: &str) -> (StatusCode, Json<PlayError>) {
     (code, Json(PlayError { error: msg.into() }))
 }
 
-/// Token from `Authorization: Bearer <token>` (preferred) or `?token=`.
-fn token_of(headers: &HeaderMap, query: Option<Uuid>) -> Option<Uuid> {
-    if let Some(val) = headers.get(AUTHORIZATION).and_then(|h| h.to_str().ok()) {
-        if let Some(t) = val
-            .strip_prefix("Bearer ")
-            .or_else(|| val.strip_prefix("bearer "))
-        {
-            if let Ok(u) = Uuid::parse_str(t.trim()) {
-                return Some(u);
-            }
-        }
-    }
-    query
+/// Token from `Authorization: Bearer <token>` only. The token is a secret, so
+/// it is never accepted via query string (`?token=` leaks into access logs,
+/// browser history, and `Referer` headers).
+fn token_of(headers: &HeaderMap) -> Option<Uuid> {
+    let val = headers.get(AUTHORIZATION).and_then(|h| h.to_str().ok())?;
+    let t = val
+        .strip_prefix("Bearer ")
+        .or_else(|| val.strip_prefix("bearer "))?;
+    Uuid::parse_str(t.trim()).ok()
 }
 
 async fn drain(outbox: &Arc<Mutex<VecDeque<ServerMsg>>>, limit: usize) -> Vec<ServerMsg> {
@@ -230,11 +220,9 @@ pub async fn register(
 pub async fn queue(
     State(app): State<Arc<AppState>>,
     headers: HeaderMap,
-    Query(q): Query<TokenQuery>,
     Json(req): Json<PlayQueueRequest>,
 ) -> Result<Json<PlayOk>, (StatusCode, Json<PlayError>)> {
-    let token = token_of(&headers, q.token)
-        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
+    let token = token_of(&headers).ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
     let best_of = game::sanitize_best_of(req.best_of);
 
     let (ip, player) = {
@@ -287,11 +275,9 @@ async fn forward(
 pub async fn commit(
     State(app): State<Arc<AppState>>,
     headers: HeaderMap,
-    Query(q): Query<TokenQuery>,
     Json(req): Json<PlayCommitRequest>,
 ) -> Result<Json<PlayOk>, (StatusCode, Json<PlayError>)> {
-    let token = token_of(&headers, q.token)
-        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
+    let token = token_of(&headers).ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
     let strategy_summary = validate_strategy_summary(&req.strategy_summary)
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "strategy_summary required"))?
         .to_string();
@@ -355,11 +341,9 @@ pub async fn commit(
 pub async fn reveal(
     State(app): State<Arc<AppState>>,
     headers: HeaderMap,
-    Query(q): Query<TokenQuery>,
     Json(req): Json<PlayRevealRequest>,
 ) -> Result<Json<PlayOk>, (StatusCode, Json<PlayError>)> {
-    let token = token_of(&headers, q.token)
-        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
+    let token = token_of(&headers).ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
     if !validate_reveal_secret(&req.secret) {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -396,11 +380,9 @@ pub async fn reveal(
 pub async fn chat(
     State(app): State<Arc<AppState>>,
     headers: HeaderMap,
-    Query(q): Query<TokenQuery>,
     Json(req): Json<PlayChatRequest>,
 ) -> Result<Json<PlayOk>, (StatusCode, Json<PlayError>)> {
-    let token = token_of(&headers, q.token)
-        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
+    let token = token_of(&headers).ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
     let text = validate_chat(&req.text)
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "text must be 1..=2000 chars"))?;
     {
@@ -426,8 +408,7 @@ pub async fn poll(
     headers: HeaderMap,
     Query(q): Query<PollQuery>,
 ) -> Result<Json<PlayPollResponse>, (StatusCode, Json<PlayError>)> {
-    let token = token_of(&headers, q.token)
-        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
+    let token = token_of(&headers).ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let timeout = Duration::from_millis(q.timeout_ms.unwrap_or(0).min(30_000));
 
@@ -467,47 +448,21 @@ mod tests {
     }
 
     #[test]
-    fn token_from_bearer_header_preferred_over_query() {
-        let header_tok = Uuid::new_v4();
-        let query_tok = Uuid::new_v4();
-        let headers = bearer(&format!("Bearer {header_tok}"));
-        // Header wins when both are present.
-        assert_eq!(token_of(&headers, Some(query_tok)), Some(header_tok));
-    }
-
-    #[test]
-    fn token_bearer_is_case_insensitive_and_trimmed() {
+    fn token_parsed_from_bearer_header_case_insensitive_and_trimmed() {
         let tok = Uuid::new_v4();
-        assert_eq!(token_of(&bearer(&format!("bearer {tok}")), None), Some(tok));
-        assert_eq!(
-            token_of(&bearer(&format!("Bearer  {tok}  ")), None),
-            Some(tok)
-        );
+        assert_eq!(token_of(&bearer(&format!("Bearer {tok}"))), Some(tok));
+        assert_eq!(token_of(&bearer(&format!("bearer {tok}"))), Some(tok));
+        assert_eq!(token_of(&bearer(&format!("Bearer  {tok}  "))), Some(tok));
     }
 
     #[test]
-    fn token_falls_back_to_query_when_header_absent_or_unparsable() {
-        let query_tok = Uuid::new_v4();
-        // No header at all.
-        assert_eq!(
-            token_of(&HeaderMap::new(), Some(query_tok)),
-            Some(query_tok)
-        );
-        // Header present but not a valid "Bearer <uuid>" → fall through to query.
-        assert_eq!(
-            token_of(&bearer("Bearer not-a-uuid"), Some(query_tok)),
-            Some(query_tok)
-        );
-        assert_eq!(
-            token_of(&bearer("Basic Zm9vOmJhcg=="), Some(query_tok)),
-            Some(query_tok)
-        );
-    }
-
-    #[test]
-    fn token_none_when_no_header_and_no_query() {
-        assert_eq!(token_of(&HeaderMap::new(), None), None);
-        assert_eq!(token_of(&bearer("Bearer garbage"), None), None);
+    fn token_is_none_without_a_valid_bearer_header() {
+        // No header, wrong scheme, or unparsable token — and never from a query
+        // string (which is no longer read).
+        assert_eq!(token_of(&HeaderMap::new()), None);
+        assert_eq!(token_of(&bearer("Bearer not-a-uuid")), None);
+        assert_eq!(token_of(&bearer("Basic Zm9vOmJhcg==")), None);
+        assert_eq!(token_of(&bearer("Bearer garbage")), None);
     }
 
     #[tokio::test]

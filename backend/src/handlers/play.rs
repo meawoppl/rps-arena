@@ -36,6 +36,10 @@ use crate::{db_ops, AppState};
 const OUTBOX_CAP: usize = 512;
 /// Idle session TTL (no requests for this long → reaped).
 const IDLE_TTL: Duration = Duration::from_secs(600);
+/// Minimum interval between accepted commits — at most one turn per second
+/// (#29), enforced before the commit is forwarded to the engine so the HTTP
+/// client can simply retry after the cooldown.
+const MIN_TURN_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommitReceipt {
     hash: String,
@@ -60,6 +64,9 @@ pub struct HttpSession {
     revealed: HashMap<Uuid, String>,
     queued: bool,
     last_seen: Instant,
+    /// Timestamp of the last accepted (forwarded) commit — enforces #29's
+    /// "at most one turn per second" before the commit reaches the engine.
+    last_commit_at: Option<Instant>,
 }
 
 pub type HttpSessions = Arc<Mutex<HashMap<Uuid, HttpSession>>>;
@@ -206,6 +213,7 @@ pub async fn register(
             revealed: HashMap::new(),
             queued: false,
             last_seen: Instant::now(),
+            last_commit_at: None,
         },
     );
 
@@ -311,6 +319,16 @@ pub async fn commit(
             }
             Idempotency::Fresh => {}
         }
+        // #29: a fresh commit no sooner than 1s after the previous one.
+        // Retryable (429) — the client just waits out the cooldown and resends.
+        if s.last_commit_at
+            .is_some_and(|t| t.elapsed() < MIN_TURN_INTERVAL)
+        {
+            return Err(err(
+                StatusCode::TOO_MANY_REQUESTS,
+                "slow down — at most one turn per second",
+            ));
+        }
         s.in_tx
             .send(ClientMsg::Commit {
                 attempt_id: req.attempt_id,
@@ -318,6 +336,7 @@ pub async fn commit(
                 strategy_summary,
             })
             .map_err(|_| err(StatusCode::BAD_REQUEST, "match not active"))?;
+        s.last_commit_at = Some(Instant::now());
         s.committed.insert(req.attempt_id, incoming);
     }
     Ok(Json(PlayOk { ok: true }))

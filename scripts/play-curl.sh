@@ -45,9 +45,10 @@ while [ "$done" = 0 ]; do
         SECRET[$aid]="$THROW:$nonce"
         hash=$(printf '%s' "${SECRET[$aid]}" | sha256sum | cut -d' ' -f1)
         summary="pure-curl client is intentionally playing $THROW for this attempt"
+        chat="round $(echo "$m" | j .round_no): committing, gl"   # chat is required with every commit
         curl -s -X POST "$SERVER/api/play/commit" -H "$AUTH" \
           -H 'content-type: application/json' \
-          -d "{\"attempt_id\":\"$aid\",\"hash\":\"$hash\",\"strategy_summary\":\"$summary\"}" >/dev/null ;;
+          -d "{\"attempt_id\":\"$aid\",\"hash\":\"$hash\",\"strategy_summary\":\"$summary\",\"chat\":\"$chat\"}" >/dev/null ;;
       AwaitReveal)
         aid=$(echo "$m" | j .attempt_id)
         curl -s -X POST "$SERVER/api/play/reveal" -H "$AUTH" \

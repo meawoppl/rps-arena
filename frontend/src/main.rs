@@ -886,20 +886,9 @@ fn throw_button(
             };
             let secret = make_secret(throw, &nonce);
             let hash = commit_hash(&secret);
-            // Send the required comment first, then commit the throw. If either
-            // call fails we stay in WaitingForThrow so the human can retry.
-            if let Err(err) = post_auth_json::<_, shared::PlayOk>(
-                "/api/play/chat",
-                &token,
-                &PlayChatRequest {
-                    text: comment.clone(),
-                },
-            )
-            .await
-            {
-                update_game(&game, &current_game, |g| g.error = Some(err));
-                return;
-            }
+            // The public comment and private strategy summary ride along with
+            // the commit itself. If the call fails we stay in WaitingForThrow so
+            // the human can retry.
             match post_auth_json::<_, shared::PlayOk>(
                 "/api/play/commit",
                 &token,
@@ -907,6 +896,7 @@ fn throw_button(
                     attempt_id,
                     hash,
                     strategy_summary: strategy_summary.clone(),
+                    chat: comment.clone(),
                 },
             )
             .await

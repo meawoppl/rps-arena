@@ -50,6 +50,7 @@ const MIN_TURN_INTERVAL: Duration = Duration::from_secs(1);
 struct CommitReceipt {
     hash: String,
     strategy_summary: String,
+    chat: String,
 }
 
 /// Server-side state for one HTTP player.
@@ -289,6 +290,10 @@ pub async fn commit(
     let strategy_summary = validate_strategy_summary(&req.strategy_summary)
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "strategy_summary required"))?
         .to_string();
+    // A public chat is a required part of every commit.
+    let chat = validate_chat(&req.chat)
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "chat required with every commit"))?
+        .to_string();
     if !validate_commit_hash(&req.hash) {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -298,6 +303,7 @@ pub async fn commit(
     let incoming = CommitReceipt {
         hash: req.hash.clone(),
         strategy_summary: strategy_summary.clone(),
+        chat: chat.clone(),
     };
     {
         let mut sessions = app.http_sessions.lock().await;
@@ -305,9 +311,9 @@ pub async fn commit(
             .get_mut(&token)
             .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unknown token"))?;
         s.last_seen = Instant::now();
-        // Idempotent only for an exact retry. A different hash or summary for
-        // the same attempt means the client is trying to change locked commit
-        // metadata.
+        // Idempotent only for an exact retry. A different hash, summary, or chat
+        // for the same attempt means the client is trying to change locked
+        // commit metadata.
         let idempotency = match s.committed.get(&req.attempt_id) {
             Some(existing) if existing == &incoming => Idempotency::Duplicate,
             Some(_) => Idempotency::Conflict,
@@ -338,6 +344,7 @@ pub async fn commit(
                 attempt_id: req.attempt_id,
                 hash: req.hash.clone(),
                 strategy_summary,
+                chat,
             })
             .map_err(|send_err| {
                 if matches!(send_err, mpsc::error::TrySendError::Full(_)) {

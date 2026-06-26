@@ -148,6 +148,12 @@ async fn main() -> anyhow::Result<()> {
                     args.strategy,
                     throw.as_str()
                 );
+                // A public chat is required with every commit. Prefer the
+                // operator-supplied line; otherwise send a neutral greeting.
+                let chat = args
+                    .chat
+                    .clone()
+                    .unwrap_or_else(|| format!("round {round_no}, here goes"));
                 pending_secrets.insert(attempt_id, secret);
 
                 println!(
@@ -160,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
                     attempt_id,
                     hash,
                     strategy_summary,
+                    chat,
                 })
                 .await
                 .context("send Commit")?;

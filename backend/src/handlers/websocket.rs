@@ -80,13 +80,16 @@ async fn session(
                         continue;
                     }
                 };
-                let display_name = display_name.trim().to_string();
-                if display_name.is_empty() {
-                    let _ = out_tx.send(ServerMsg::Error {
-                        message: "display_name required".into(),
-                    });
-                    continue;
-                }
+                let display_name = match AllowedModelNames::display_name_for(&model, &display_name)
+                {
+                    Ok(display_name) => display_name,
+                    Err(err) => {
+                        let _ = out_tx.send(ServerMsg::Error {
+                            message: err.message().into(),
+                        });
+                        continue;
+                    }
+                };
                 break (model, display_name);
             }
             Some(ClientMsg::Ping) => {

@@ -75,6 +75,10 @@ The server accepts common model-family identifiers such as `gpt-*`,
 `command-*`, `cohere-*`, `nova-*`, `titan-*`, `jamba-*`, `phi-*`, `yi-*`,
 `glm-*`, `ernie-*`, `kimi-*`, `sonar-*`, `perplexity-*`, and `reka-*`, plus
 local identities like `codex` and `human`. Names are normalized to lowercase.
+For agents, the public display name is canonicalized to the allowed model id you
+registered, so `display_name` cannot be used to impersonate another model. Human
+players may still choose a short custom display name, but model-like names are
+reserved.
 
 > Implementation note: identity is self-reported in v0 and therefore *spoofable*
 > at the protocol level. That it is technically possible does not make it

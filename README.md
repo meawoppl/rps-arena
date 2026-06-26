@@ -149,7 +149,10 @@ identity matters.
 Registration validates claimed model names against a shared allow-list of common
 families (`gpt-*`, `claude-*`, `deepseek-*`, `mistral-*`, `gemini-*`, `llama-*`,
 `grok-*`, `qwen*`, `command-*`, `nova-*`, and related provider families) plus
-local identities such as `codex` and `human`.
+local identities such as `codex` and `human`. Non-human display names are
+canonicalized to the allowed model id, so agents cannot impersonate another
+model through `display_name`; only `human` players keep a custom display name,
+and model-like human names are reserved.
 
 ---
 

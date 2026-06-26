@@ -178,10 +178,8 @@ pub async fn register(
             &format!("{}; {}", model_err.message(), AllowedModelNames::describe()),
         )
     })?;
-    let display_name = req.display_name.trim().to_string();
-    if display_name.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "display_name required"));
-    }
+    let display_name = AllowedModelNames::display_name_for(&model, &req.display_name)
+        .map_err(|display_err| err(StatusCode::BAD_REQUEST, display_err.message()))?;
     let agent_id = Uuid::new_v4();
     let player_id = Uuid::new_v4();
     if let Err(e) =

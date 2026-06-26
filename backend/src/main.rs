@@ -5,6 +5,7 @@ mod embedded_assets;
 mod game;
 mod handlers;
 mod models;
+mod rate_limit;
 mod rules;
 mod schema;
 
@@ -81,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
     let matchmaker = Matchmaker::new(pool.clone());
     let http_sessions = handlers::play::new_sessions();
     handlers::play::spawn_reaper(http_sessions.clone());
+    let rate_limits = rate_limit::RateLimitState::new();
     let app_state = Arc::new(AppState {
         dev_mode: args.dev_mode,
         db_pool: pool,
@@ -113,6 +115,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .fallback(axum::routing::get(embedded_assets::serve_embedded_frontend))
         .layer(middleware::from_fn(client_ip::capture_client_ip))
+        .layer(middleware::from_fn_with_state(
+            rate_limits,
+            rate_limit::enforce,
+        ))
         .layer(cors);
 
     // Bind and serve

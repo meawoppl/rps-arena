@@ -7,8 +7,11 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::time::Duration;
 
+use chrono::Utc;
 use tokio::sync::{mpsc, Mutex};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use shared::{
@@ -19,6 +22,14 @@ use shared::{
 use crate::db::DbPool;
 use crate::db_ops::{self, SeatInfo};
 use crate::rules;
+
+/// Per-phase turn deadline. A player who doesn't commit/reveal within this
+/// window forfeits the round (`EndReason::Timeout`), so a stalled or vanished
+/// player can no longer deadlock the match (and leak its task/DB row).
+const TURN_DEADLINE: Duration = Duration::from_secs(30);
+/// Minimum interval between a player's *accepted* commits — at most one turn
+/// per second, so matches can't be ground out faster than realistic rates.
+const MIN_TURN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A connected player from the engine's point of view.
 pub struct PlayerConn {
@@ -108,6 +119,9 @@ enum PhaseOut {
     Both(PhaseValue, PhaseValue),
     /// `winner_seat` is the non-offending player.
     Abort { winner_seat: u8, reason: EndReason },
+    /// The phase deadline elapsed. `winner_seat` is the player who DID respond
+    /// in time (the other forfeits); `None` if neither responded.
+    Timeout { winner_seat: Option<u8> },
 }
 
 fn outcome_str(o: Outcome) -> &'static str {
@@ -149,6 +163,7 @@ async fn handle_msg(
     me: &PlayerConn,
     opp: &PlayerConn,
     slot: &mut Option<PhaseValue>,
+    last_commit: &mut Option<Instant>,
 ) -> Flow {
     match msg {
         None => Flow::Abort(EndReason::Disconnect),
@@ -185,31 +200,38 @@ async fn handle_msg(
             hash,
             strategy_summary,
         }) if phase == Phase::Commit => {
-            if aid == attempt_id {
-                if !validate_commit_hash(&hash) {
-                    me.send(ServerMsg::Error {
-                        message: "hash must be 64 lowercase hex chars".into(),
-                    });
-                    Flow::Continue
-                } else if let Some(strategy_summary) = validate_strategy_summary(&strategy_summary)
-                {
-                    *slot = Some(PhaseValue::Commit(CommitValue {
-                        hash,
-                        strategy_summary: strategy_summary.to_string(),
-                    }));
-                    Flow::Continue
-                } else {
-                    me.send(ServerMsg::Error {
-                        message: "strategy_summary required and must be at most 1000 bytes".into(),
-                    });
-                    Flow::Continue
-                }
-            } else {
+            if aid != attempt_id {
                 me.send(ServerMsg::Error {
                     message: "commit for wrong attempt_id".into(),
                 });
-                Flow::Abort(EndReason::Forfeit)
+                return Flow::Abort(EndReason::Forfeit);
             }
+            if !validate_commit_hash(&hash) {
+                me.send(ServerMsg::Error {
+                    message: "hash must be 64 lowercase hex chars".into(),
+                });
+                return Flow::Continue;
+            }
+            let Some(summary) = validate_strategy_summary(&strategy_summary) else {
+                me.send(ServerMsg::Error {
+                    message: "strategy_summary required and must be at most 1000 bytes".into(),
+                });
+                return Flow::Continue;
+            };
+            // At most one accepted commit per second (#29). Too-fast commits are
+            // rejected retryably (not a forfeit) so the slot stays open.
+            if last_commit.is_some_and(|t| t.elapsed() < MIN_TURN_INTERVAL) {
+                me.send(ServerMsg::Error {
+                    message: "slow down — at most one turn per second".into(),
+                });
+                return Flow::Continue;
+            }
+            *last_commit = Some(Instant::now());
+            *slot = Some(PhaseValue::Commit(CommitValue {
+                hash,
+                strategy_summary: summary.to_string(),
+            }));
+            Flow::Continue
         }
         Some(ClientMsg::Reveal {
             attempt_id: aid,
@@ -244,6 +266,7 @@ async fn handle_msg(
 
 /// Collect both players' commit hashes (or reveal secrets), relaying chat from
 /// either side concurrently while we wait.
+#[allow(clippy::too_many_arguments)]
 async fn collect_phase(
     pool: &DbPool,
     match_id: Uuid,
@@ -252,24 +275,39 @@ async fn collect_phase(
     phase: Phase,
     a: &mut PlayerConn,
     b: &mut PlayerConn,
+    last_commit_a: &mut Option<Instant>,
+    last_commit_b: &mut Option<Instant>,
+    deadline: Instant,
 ) -> PhaseOut {
     let mut va: Option<PhaseValue> = None;
     let mut vb: Option<PhaseValue> = None;
+    let sleep = tokio::time::sleep_until(deadline);
+    tokio::pin!(sleep);
     while va.is_none() || vb.is_none() {
         tokio::select! {
             m = a.inbox.recv(), if va.is_none() => {
                 if let Flow::Abort(reason) =
-                    handle_msg(pool, match_id, round_no, attempt_id, phase, m, a, b, &mut va).await
+                    handle_msg(pool, match_id, round_no, attempt_id, phase, m, a, b, &mut va, last_commit_a).await
                 {
                     return PhaseOut::Abort { winner_seat: 1, reason };
                 }
             }
             m = b.inbox.recv(), if vb.is_none() => {
                 if let Flow::Abort(reason) =
-                    handle_msg(pool, match_id, round_no, attempt_id, phase, m, b, a, &mut vb).await
+                    handle_msg(pool, match_id, round_no, attempt_id, phase, m, b, a, &mut vb, last_commit_b).await
                 {
                     return PhaseOut::Abort { winner_seat: 0, reason };
                 }
+            }
+            _ = &mut sleep => {
+                // Deadline elapsed: whoever already responded wins; the silent
+                // player forfeits. If neither responded, no winner.
+                let winner_seat = match (va.is_some(), vb.is_some()) {
+                    (true, false) => Some(0u8),
+                    (false, true) => Some(1u8),
+                    _ => None,
+                };
+                return PhaseOut::Timeout { winner_seat };
             }
         }
     }
@@ -331,6 +369,8 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
     let mut round_no: u32 = 1;
     let mut end_reason = EndReason::WinByScore;
     let mut forced_winner: Option<u8> = None;
+    let mut last_commit_a: Option<Instant> = None;
+    let mut last_commit_b: Option<Instant> = None;
 
     'match_loop: loop {
         let mut attempt_no: u32 = 1;
@@ -355,6 +395,19 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
                 rules: rules.clone(),
             });
 
+            let commit_deadline = Instant::now() + TURN_DEADLINE;
+            let commit_at = Utc::now()
+                + chrono::Duration::from_std(TURN_DEADLINE)
+                    .unwrap_or_else(|_| chrono::Duration::seconds(30));
+            a.send(ServerMsg::TurnDeadline {
+                attempt_id,
+                at: commit_at,
+            });
+            b.send(ServerMsg::TurnDeadline {
+                attempt_id,
+                at: commit_at,
+            });
+
             let (commit_a, commit_b) = match collect_phase(
                 &pool,
                 match_id,
@@ -363,6 +416,9 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
                 Phase::Commit,
                 &mut a,
                 &mut b,
+                &mut last_commit_a,
+                &mut last_commit_b,
+                commit_deadline,
             )
             .await
             {
@@ -380,10 +436,27 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
                     end_reason = reason;
                     break 'match_loop;
                 }
+                PhaseOut::Timeout { winner_seat } => {
+                    forced_winner = winner_seat;
+                    end_reason = EndReason::Timeout;
+                    break 'match_loop;
+                }
             };
 
+            let reveal_deadline = Instant::now() + TURN_DEADLINE;
+            let reveal_at = Utc::now()
+                + chrono::Duration::from_std(TURN_DEADLINE)
+                    .unwrap_or_else(|_| chrono::Duration::seconds(30));
             a.send(ServerMsg::AwaitReveal { attempt_id });
             b.send(ServerMsg::AwaitReveal { attempt_id });
+            a.send(ServerMsg::TurnDeadline {
+                attempt_id,
+                at: reveal_at,
+            });
+            b.send(ServerMsg::TurnDeadline {
+                attempt_id,
+                at: reveal_at,
+            });
 
             let (sa, sb) = match collect_phase(
                 &pool,
@@ -393,6 +466,9 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
                 Phase::Reveal,
                 &mut a,
                 &mut b,
+                &mut last_commit_a,
+                &mut last_commit_b,
+                reveal_deadline,
             )
             .await
             {
@@ -408,6 +484,11 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
                 } => {
                     forced_winner = Some(winner_seat);
                     end_reason = reason;
+                    break 'match_loop;
+                }
+                PhaseOut::Timeout { winner_seat } => {
+                    forced_winner = winner_seat;
+                    end_reason = EndReason::Timeout;
                     break 'match_loop;
                 }
             };

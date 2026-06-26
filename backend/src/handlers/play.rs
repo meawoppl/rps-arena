@@ -23,6 +23,7 @@ use tokio::sync::{mpsc, Mutex, Notify};
 use uuid::Uuid;
 
 use shared::{
+    validate_chat, validate_commit_hash, validate_reveal_secret, validate_strategy_summary,
     AllowedModelNames, ClientMsg, PlayChatRequest, PlayCommitRequest, PlayError, PlayOk,
     PlayPollResponse, PlayQueueRequest, PlayRegisterRequest, PlayRegisterResponse,
     PlayRevealRequest, ServerMsg,
@@ -35,11 +36,6 @@ use crate::{db_ops, AppState};
 const OUTBOX_CAP: usize = 512;
 /// Idle session TTL (no requests for this long → reaped).
 const IDLE_TTL: Duration = Duration::from_secs(600);
-/// Max chat length accepted over HTTP.
-const MAX_CHAT_LEN: usize = 2000;
-/// Max strategy summary length accepted over HTTP/WebSocket commits.
-const MAX_STRATEGY_SUMMARY_LEN: usize = 1000;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommitReceipt {
     hash: String,
@@ -145,26 +141,6 @@ fn idempotency_of(prior: Option<&String>, incoming: &str) -> Idempotency {
         Some(existing) if existing == incoming => Idempotency::Duplicate,
         Some(_) => Idempotency::Conflict,
         None => Idempotency::Fresh,
-    }
-}
-
-/// Validate and normalize chat text: trim, then enforce `1..=MAX_CHAT_LEN`.
-/// Returns the trimmed text on success, `None` if empty or over the cap.
-fn validate_chat(raw: &str) -> Option<&str> {
-    let text = raw.trim();
-    if text.is_empty() || text.len() > MAX_CHAT_LEN {
-        None
-    } else {
-        Some(text)
-    }
-}
-
-fn validate_strategy_summary(raw: &str) -> Option<&str> {
-    let text = raw.trim();
-    if text.is_empty() || text.len() > MAX_STRATEGY_SUMMARY_LEN {
-        None
-    } else {
-        Some(text)
     }
 }
 
@@ -301,6 +277,12 @@ pub async fn commit(
     let strategy_summary = validate_strategy_summary(&req.strategy_summary)
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "strategy_summary required"))?
         .to_string();
+    if !validate_commit_hash(&req.hash) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "hash must be 64 lowercase hex chars",
+        ));
+    }
     let incoming = CommitReceipt {
         hash: req.hash.clone(),
         strategy_summary: strategy_summary.clone(),
@@ -349,6 +331,12 @@ pub async fn reveal(
 ) -> Result<Json<PlayOk>, (StatusCode, Json<PlayError>)> {
     let token = token_of(&headers, q.token)
         .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
+    if !validate_reveal_secret(&req.secret) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "secret must be '<throw>:<hex nonce>' and at most 256 bytes",
+        ));
+    }
     {
         let mut sessions = app.http_sessions.lock().await;
         let s = sessions
@@ -441,6 +429,7 @@ pub async fn poll(
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+    use shared::MAX_CHAT_LEN;
 
     fn bearer(value: &str) -> HeaderMap {
         let mut h = HeaderMap::new();

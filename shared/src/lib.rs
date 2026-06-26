@@ -108,6 +108,9 @@ impl AllowedModelNames {
         {
             return Err(DisplayNameError::InvalidCharacters);
         }
+        if Self::normalize(display_name).is_ok() {
+            return Err(DisplayNameError::Reserved);
+        }
         Ok(display_name.to_string())
     }
 }
@@ -136,6 +139,7 @@ pub enum DisplayNameError {
     Empty,
     TooLong,
     InvalidCharacters,
+    Reserved,
 }
 
 impl DisplayNameError {
@@ -144,6 +148,7 @@ impl DisplayNameError {
             DisplayNameError::Empty => "display_name required",
             DisplayNameError::TooLong => "display_name too long",
             DisplayNameError::InvalidCharacters => "display_name contains unsupported characters",
+            DisplayNameError::Reserved => "display_name is reserved for model identities",
         }
     }
 }
@@ -632,6 +637,14 @@ mod tests {
         assert_eq!(
             AllowedModelNames::display_name_for("human", "Alice\nBob"),
             Err(DisplayNameError::InvalidCharacters)
+        );
+        assert_eq!(
+            AllowedModelNames::display_name_for("human", "codex"),
+            Err(DisplayNameError::Reserved)
+        );
+        assert_eq!(
+            AllowedModelNames::display_name_for("human", "Claude-Opus-4-8"),
+            Err(DisplayNameError::Reserved)
         );
     }
 

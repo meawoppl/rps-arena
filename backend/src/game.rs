@@ -8,6 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -48,6 +49,11 @@ const MIN_TURN_INTERVAL: Duration = Duration::from_secs(1);
 /// Max simultaneous in-progress matches per client IP (#32) — caps the
 /// throughput one actor can use to grind the leaderboard.
 const MAX_MATCHES_PER_IP: usize = 2;
+/// Queued players must keep their transport alive while waiting. HTTP clients
+/// refresh this by polling; WebSocket clients refresh it by sending any frame
+/// such as Ping. The value is longer than the max 30s HTTP long-poll window so
+/// healthy waiters do not expire between requests.
+const QUEUE_IDLE_TTL: Duration = Duration::from_secs(90);
 
 /// A connected player from the engine's point of view.
 pub struct PlayerConn {
@@ -57,6 +63,7 @@ pub struct PlayerConn {
     pub display_name: String,
     pub out: mpsc::Sender<ServerMsg>,
     pub inbox: mpsc::Receiver<ClientMsg>,
+    pub queue_heartbeat: QueueHeartbeat,
 }
 
 impl PlayerConn {
@@ -66,6 +73,29 @@ impl PlayerConn {
                 "dropping server message because player outbound channel is full/closed"
             );
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct QueueHeartbeat(Arc<StdMutex<Instant>>);
+
+impl QueueHeartbeat {
+    pub fn new() -> Self {
+        Self(Arc::new(StdMutex::new(Instant::now())))
+    }
+
+    pub fn touch(&self) {
+        *self.0.lock().expect("queue heartbeat poisoned") = Instant::now();
+    }
+
+    fn is_stale(&self) -> bool {
+        self.0.lock().expect("queue heartbeat poisoned").elapsed() >= QUEUE_IDLE_TTL
+    }
+
+    #[cfg(test)]
+    fn force_stale_for_test(&self) {
+        *self.0.lock().expect("queue heartbeat poisoned") =
+            Instant::now() - QUEUE_IDLE_TTL - Duration::from_secs(1);
     }
 }
 
@@ -121,6 +151,7 @@ impl Matchmaker {
 
         let mut q = self.queue.lock().await;
         let dq = q.entry(best_of).or_default();
+        prune_stale_waiters(dq);
         // Anti self-play: only pair with an opponent on a different IP (when
         // both IPs are known). Unknown IP on either side falls back to pairing.
         let opp_idx = dq.iter().position(|(opp_ip, _)| match (opp_ip, ip) {
@@ -161,6 +192,21 @@ impl Matchmaker {
             dq.push_back((ip, player));
         }
     }
+}
+
+fn prune_stale_waiters(dq: &mut VecDeque<Waiting>) {
+    let mut kept = VecDeque::with_capacity(dq.len());
+    while let Some((ip, player)) = dq.pop_front() {
+        if player.queue_heartbeat.is_stale() {
+            player.send(ServerMsg::Error {
+                message: "left matchmaking queue after inactivity; poll or ping to stay queued"
+                    .into(),
+            });
+        } else {
+            kept.push_back((ip, player));
+        }
+    }
+    *dq = kept;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -721,6 +767,20 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
 mod tests {
     use super::*;
 
+    fn test_player(model: &str, heartbeat: QueueHeartbeat) -> PlayerConn {
+        let (out, _out_rx) = mpsc::channel(4);
+        let (_in_tx, inbox) = mpsc::channel(4);
+        PlayerConn {
+            agent_id: Uuid::new_v4(),
+            player_id: Uuid::new_v4(),
+            model: model.to_string(),
+            display_name: model.to_string(),
+            out,
+            inbox,
+            queue_heartbeat: heartbeat,
+        }
+    }
+
     #[test]
     fn sanitize_forces_odd_and_clamps() {
         assert_eq!(sanitize_best_of(0), 1);
@@ -752,5 +812,21 @@ mod tests {
             HUMAN_TURN_DEADLINE
         );
         assert_eq!(turn_deadline_for("human", "human"), HUMAN_TURN_DEADLINE);
+    }
+
+    #[test]
+    fn prune_stale_waiters_keeps_only_live_queue_entries() {
+        let live_heartbeat = QueueHeartbeat::new();
+        let stale_heartbeat = QueueHeartbeat::new();
+        stale_heartbeat.force_stale_for_test();
+
+        let live_player = test_player("codex-5-5", live_heartbeat);
+        let stale_player = test_player("claude-opus-4-8", stale_heartbeat);
+        let mut queue = VecDeque::from([(None, stale_player), (None, live_player)]);
+
+        prune_stale_waiters(&mut queue);
+
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].1.model, "codex-5-5");
     }
 }

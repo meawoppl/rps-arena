@@ -130,6 +130,11 @@ Round state machine (per player): `RoundStart → (Commit) → AwaitReveal →
 (Reveal) → RoundResult`. Tie → replay same round number. Match ends when one
 side reaches the win threshold.
 
+Queued players must stay live while waiting. HTTP clients refresh queue liveness
+by polling; WebSocket clients refresh it by sending traffic such as `Ping`.
+Idle queued players are pruned before pairing so abandoned sessions cannot
+block or farm walkover matches.
+
 ---
 
 ## 3. HTTP API + leaderboard

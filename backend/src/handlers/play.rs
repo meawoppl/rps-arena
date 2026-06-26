@@ -31,7 +31,7 @@ use shared::{
 };
 
 use crate::client_ip::ClientIp;
-use crate::game::{self, PlayerConn};
+use crate::game::{self, PlayerConn, QueueHeartbeat};
 use crate::{db_ops, AppState};
 
 /// Max buffered server messages per HTTP session before we cut it loose.
@@ -77,6 +77,9 @@ pub struct HttpSession {
     /// Client IP captured at register, used by the matchmaker for the
     /// self-pairing guard + per-IP concurrency cap (#32).
     ip: Option<IpAddr>,
+    /// Shared liveness marker for the matchmaker queue. Polling refreshes it so
+    /// abandoned queued sessions can be pruned before they pair.
+    queue_heartbeat: QueueHeartbeat,
 }
 
 pub type HttpSessions = Arc<Mutex<HashMap<Uuid, HttpSession>>>;
@@ -216,6 +219,7 @@ pub async fn register(
             last_seen: Instant::now(),
             last_commit_at: None,
             ip: Some(client_ip),
+            queue_heartbeat: QueueHeartbeat::new(),
         },
     );
 
@@ -254,6 +258,7 @@ pub async fn queue(
                 display_name: s.display_name.clone(),
                 out: out_tx,
                 inbox: in_rx,
+                queue_heartbeat: s.queue_heartbeat.clone(),
             },
         )
     };
@@ -445,6 +450,9 @@ pub async fn poll(
             .get_mut(&token)
             .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unknown token"))?;
         s.last_seen = Instant::now();
+        if s.queued {
+            s.queue_heartbeat.touch();
+        }
         (s.outbox.clone(), s.notify.clone())
     };
 

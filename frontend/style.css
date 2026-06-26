@@ -704,22 +704,16 @@ tbody tr:last-child td {
 
 /* Match transcript rendered as a chat-bubble thread: model A on the left,
    model B on the right, a winner emoji per round. */
-.round-thread {
+.chat-transcript {
     display: grid;
     gap: 6px;
-}
-
-.round-group {
-    display: grid;
-    gap: 6px;
-    margin-bottom: 12px;
 }
 
 .round-divider {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin: 4px 0 2px;
+    margin: 14px 0 2px;
     color: #9aa6b2;
     font-size: 13px;
     white-space: nowrap;
@@ -768,6 +762,13 @@ tbody tr:last-child td {
     border-color: #e0af68;
 }
 
+/* Move bubble: a compact inline row (player + throw chip + result emoji). */
+.chat-bubble.move {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .chat-bubble > header {
     display: flex;
     align-items: center;
@@ -804,46 +805,54 @@ tbody tr:last-child td {
     color: #d8dee9;
     line-height: 1.45;
     overflow-wrap: anywhere;
+    white-space: pre-wrap;
 }
 
-.message-log {
-    display: grid;
-    gap: 10px;
-}
-
-.message-line {
+/* Thought bubble: the private strategy, visually distinct from speech —
+   a dashed cloud, italic, with a little trailing dot like a comic thought. */
+.thought-bubble {
     position: relative;
-    display: grid;
-    gap: 6px;
-    padding: 12px 14px;
-    padding-left: 50px;
-    border: 1px solid #303846;
-    border-radius: 8px;
-    background: #151922;
-}
-
-.message-avatar {
-    position: absolute;
-    top: 12px;
-    left: 12px;
-    display: grid;
-    place-items: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: #202735;
-    font-size: 16px;
-}
-
-.message-line header {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    gap: 8px;
+    max-width: 72%;
+    min-width: 0;
+    margin: 1px 0 4px;
+    padding: 7px 13px;
+    border: 1px dashed #3b4660;
+    border-radius: 16px;
+    background: rgba(122, 162, 247, 0.06);
+    color: #aeb7c6;
+    font-style: italic;
 }
 
-.message-line p {
-    color: #d8dee9;
+.thought-bubble::after {
+    content: "";
+    position: absolute;
+    bottom: -7px;
+    width: 8px;
+    height: 8px;
+    border: 1px dashed #3b4660;
+    border-radius: 50%;
+    background: #1a1b26;
+}
+
+.thought-bubble.left::after {
+    left: 18px;
+}
+
+.thought-bubble.right::after {
+    right: 18px;
+}
+
+.thought-emoji {
+    flex: 0 0 auto;
+    font-size: 15px;
+    line-height: 1.5;
+    font-style: normal;
+}
+
+.thought-bubble p {
+    margin: 0;
     line-height: 1.45;
     overflow-wrap: anywhere;
     white-space: pre-wrap;

@@ -81,7 +81,11 @@ curl localhost:3000/api/matches/<match_id>
 ### Deployment Configuration
 
 The backend requires `DATABASE_URL`. `HOST` and `PORT` default to `0.0.0.0` and
-`3000`.
+`3000`. Database pool sizing is explicit and configurable:
+`DATABASE_POOL_MAX_SIZE` (default `16`), `DATABASE_POOL_MIN_IDLE` (default `2`),
+`DATABASE_POOL_CONNECTION_TIMEOUT_SECS` (default `5`),
+`DATABASE_POOL_IDLE_TIMEOUT_SECS` (default `300`), and
+`DATABASE_POOL_MAX_LIFETIME_SECS` (default `1800`).
 
 Client IP capture uses the socket peer by default. When running behind a trusted
 proxy, forwarded headers (`CF-Connecting-IP`, `Fly-Client-IP`, `X-Real-IP`, then

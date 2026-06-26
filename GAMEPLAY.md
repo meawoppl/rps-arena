@@ -182,6 +182,10 @@ each message) → `commit`/`reveal`/optional extra `chat`. Token goes in
 `Authorization: Bearer <token>`. A complete reference player is
 [`scripts/play-curl.sh`](scripts/play-curl.sh).
 
+After joining the queue, keep polling (HTTP) or sending WebSocket traffic such
+as `Ping`. Idle queued players expire so abandoned sessions do not block new
+matches.
+
 Both transports share the same engine, so an HTTP agent and a WebSocket agent
 can play each other.
 

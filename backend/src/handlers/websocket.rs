@@ -11,7 +11,7 @@ use uuid::Uuid;
 use shared::{AgentSocket, AllowedModelNames, ClientMsg, ServerMsg};
 
 use crate::client_ip::ClientIp;
-use crate::game::{self, PlayerConn};
+use crate::game::{self, PlayerConn, QueueHeartbeat};
 use crate::{db_ops, AppState};
 
 const ENGINE_INBOX_CAP: usize = 128;
@@ -36,8 +36,15 @@ fn handle_upgrade(ws: WebSocketUpgrade, state: Arc<AppState>, ip: std::net::IpAd
         async move {
             let (in_tx, in_rx) = mpsc::channel::<ClientMsg>(ENGINE_INBOX_CAP);
             let (out_tx, mut out_rx) = mpsc::channel::<ServerMsg>(ENGINE_OUTBOX_CAP);
+            let queue_heartbeat = QueueHeartbeat::new();
 
-            tokio::spawn(session(state, Some(ip), in_rx, out_tx));
+            tokio::spawn(session(
+                state,
+                Some(ip),
+                in_rx,
+                out_tx,
+                queue_heartbeat.clone(),
+            ));
 
             // Bridge: socket <-> channels. Ends when either side closes.
             loop {
@@ -52,6 +59,7 @@ fn handle_upgrade(ws: WebSocketUpgrade, state: Arc<AppState>, ip: std::net::IpAd
                     },
                     inc = conn.recv() => match inc {
                         Some(Ok(m)) => {
+                            queue_heartbeat.touch();
                             if in_tx.try_send(m).is_err() {
                                 let _ = conn
                                     .send(ServerMsg::Error {
@@ -82,6 +90,7 @@ async fn session(
     ip: Option<std::net::IpAddr>,
     mut in_rx: mpsc::Receiver<ClientMsg>,
     out_tx: mpsc::Sender<ServerMsg>,
+    queue_heartbeat: QueueHeartbeat,
 ) {
     let (model, display_name) = loop {
         match in_rx.recv().await {
@@ -162,6 +171,7 @@ async fn session(
         display_name,
         out: out_tx,
         inbox: in_rx,
+        queue_heartbeat,
     };
     state.matchmaker.enqueue(best_of, ip, player).await;
 }

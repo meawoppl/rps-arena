@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 use gloo_net::http::Request;
 use gloo_timers::callback::Interval;
@@ -544,7 +544,8 @@ fn render_match_detail(detail: &MatchDetail) -> Html {
 
 /// Render the whole match as one chat thread: real chat = speech bubbles,
 /// strategy summaries = interleaved 💭 thought bubbles, throws = move bubbles
-/// with a winner emoji. Chat is placed under the round it belongs to.
+/// with a winner emoji. Every chat row is rendered, even if the round it points
+/// at never produced a persisted round attempt.
 fn render_transcript(detail: &MatchDetail) -> Html {
     let summary = &detail.summary;
     if detail.rounds.is_empty() && detail.chat.is_empty() {
@@ -568,6 +569,8 @@ fn render_transcript(detail: &MatchDetail) -> Html {
         });
     }
 
+    let mut rendered_chat_rounds = HashSet::new();
+
     // One block per attempt; the round's chat hangs under its final attempt.
     for (i, round) in detail.rounds.iter().enumerate() {
         let last_of_round = detail
@@ -575,6 +578,7 @@ fn render_transcript(detail: &MatchDetail) -> Html {
             .get(i + 1)
             .is_none_or(|next| next.round_no != round.round_no);
         let convo: Vec<&ChatRecord> = if last_of_round {
+            rendered_chat_rounds.insert(round.round_no);
             detail
                 .chat
                 .iter()
@@ -584,6 +588,25 @@ fn render_transcript(detail: &MatchDetail) -> Html {
             Vec::new()
         };
         blocks.push(render_round_block(round, summary, &convo));
+    }
+
+    // Defensive fallback: chats can exist for rounds that never recorded an
+    // attempt, for example if a match ends by disconnect/timeout before reveal.
+    let unattached: Vec<&ChatRecord> = detail
+        .chat
+        .iter()
+        .filter(|c| {
+            c.round_no
+                .is_some_and(|round_no| !rendered_chat_rounds.contains(&round_no))
+        })
+        .collect();
+    if !unattached.is_empty() {
+        blocks.push(html! {
+            <section class="round-block">
+                <div class="round-divider"><span>{ "Unattached chat" }</span></div>
+                { render_convo(&unattached, summary) }
+            </section>
+        });
     }
 
     html! { <div class="match-transcript">{ for blocks.into_iter() }</div> }

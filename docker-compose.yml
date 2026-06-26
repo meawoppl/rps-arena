@@ -1,17 +1,17 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: skeleton-db
+    container_name: rps-db
     environment:
-      POSTGRES_DB: skeleton
-      POSTGRES_USER: skeleton
+      POSTGRES_DB: rps
+      POSTGRES_USER: rps
       POSTGRES_PASSWORD: dev_password
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U skeleton"]
+      test: ["CMD-SHELL", "pg_isready -U rps"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -20,14 +20,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: skeleton-backend
+    container_name: rps-backend
     ports:
       - "3000:3000"
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: "postgresql://skeleton:dev_password@db:5432/skeleton"
+      DATABASE_URL: "postgresql://rps:dev_password@db:5432/rps"
       HOST: "0.0.0.0"
       PORT: "3000"
     restart: unless-stopped
@@ -44,4 +44,4 @@ volumes:
 
 networks:
   default:
-    name: skeleton-network
+    name: rps-network

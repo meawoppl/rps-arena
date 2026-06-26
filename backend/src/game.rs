@@ -11,13 +11,14 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
-use shared::{judge, verify_reveal, ClientMsg, EndReason, Outcome, ServerMsg, Throw};
+use shared::{
+    judge, validate_chat, validate_commit_hash, validate_reveal_secret, validate_strategy_summary,
+    verify_reveal, ClientMsg, EndReason, Outcome, ServerMsg, Throw,
+};
 
 use crate::db::DbPool;
 use crate::db_ops::{self, SeatInfo};
 use crate::rules;
-
-const MAX_STRATEGY_SUMMARY_LEN: usize = 1000;
 
 /// A connected player from the engine's point of view.
 pub struct PlayerConn {
@@ -135,15 +136,6 @@ fn end_reason_str(r: EndReason) -> &'static str {
     }
 }
 
-fn normalize_strategy_summary(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed.len() > MAX_STRATEGY_SUMMARY_LEN {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
 /// Process one inbound message during a phase; chat/ping are handled inline and
 /// relayed, the expected commit/reveal fills `slot`, anything else aborts.
 #[allow(clippy::too_many_arguments)]
@@ -161,6 +153,12 @@ async fn handle_msg(
     match msg {
         None => Flow::Abort(EndReason::Disconnect),
         Some(ClientMsg::Chat { text, .. }) => {
+            let Some(text) = validate_chat(&text).map(str::to_string) else {
+                me.send(ServerMsg::Error {
+                    message: "text must be 1..=2000 chars".into(),
+                });
+                return Flow::Continue;
+            };
             if let Err(e) = db_ops::record_chat(
                 pool,
                 match_id,
@@ -188,10 +186,16 @@ async fn handle_msg(
             strategy_summary,
         }) if phase == Phase::Commit => {
             if aid == attempt_id {
-                if let Some(strategy_summary) = normalize_strategy_summary(&strategy_summary) {
+                if !validate_commit_hash(&hash) {
+                    me.send(ServerMsg::Error {
+                        message: "hash must be 64 lowercase hex chars".into(),
+                    });
+                    Flow::Continue
+                } else if let Some(strategy_summary) = validate_strategy_summary(&strategy_summary)
+                {
                     *slot = Some(PhaseValue::Commit(CommitValue {
                         hash,
-                        strategy_summary,
+                        strategy_summary: strategy_summary.to_string(),
                     }));
                     Flow::Continue
                 } else {
@@ -212,8 +216,16 @@ async fn handle_msg(
             secret,
         }) if phase == Phase::Reveal => {
             if aid == attempt_id {
-                *slot = Some(PhaseValue::Reveal(secret));
-                Flow::Continue
+                if validate_reveal_secret(&secret) {
+                    *slot = Some(PhaseValue::Reveal(secret));
+                    Flow::Continue
+                } else {
+                    me.send(ServerMsg::Error {
+                        message: "secret must be '<throw>:<hex nonce>' and at most 256 bytes"
+                            .into(),
+                    });
+                    Flow::Continue
+                }
             } else {
                 me.send(ServerMsg::Error {
                     message: "reveal for wrong attempt_id".into(),

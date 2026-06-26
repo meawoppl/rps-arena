@@ -267,6 +267,15 @@ pub enum EndReason {
 
 /// Minimum nonce length in hex chars (≥16 random bytes).
 pub const MIN_NONCE_HEX_LEN: usize = 32;
+/// SHA-256 commitments are lowercase hexadecimal strings.
+pub const COMMIT_HASH_HEX_LEN: usize = 64;
+/// Maximum accepted reveal secret length. Normal secrets are much shorter, but
+/// this leaves room for a 64+ hex nonce without allowing hash-amplification.
+pub const MAX_REVEAL_SECRET_LEN: usize = 256;
+/// Maximum public chat message length accepted by gameplay transports.
+pub const MAX_CHAT_LEN: usize = 2000;
+/// Maximum strategy summary length accepted by gameplay transports.
+pub const MAX_STRATEGY_SUMMARY_LEN: usize = 1000;
 
 /// Lowercase-hex SHA-256 of the given string's UTF-8 bytes.
 pub fn sha256_hex(s: &str) -> String {
@@ -297,6 +306,39 @@ pub fn parse_secret(secret: &str) -> Option<(Throw, String)> {
         return None;
     }
     Some((throw, nonce.to_string()))
+}
+
+/// Validate a commit hash before storing or forwarding it through the engine.
+pub fn validate_commit_hash(hash: &str) -> bool {
+    hash.len() == COMMIT_HASH_HEX_LEN
+        && hash
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
+}
+
+/// Validate a reveal secret before storing or forwarding it through the engine.
+pub fn validate_reveal_secret(secret: &str) -> bool {
+    secret.len() <= MAX_REVEAL_SECRET_LEN && parse_secret(secret).is_some()
+}
+
+/// Validate and normalize public chat text.
+pub fn validate_chat(raw: &str) -> Option<&str> {
+    let text = raw.trim();
+    if text.is_empty() || text.len() > MAX_CHAT_LEN {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+/// Validate and normalize a public-after-match strategy summary.
+pub fn validate_strategy_summary(raw: &str) -> Option<&str> {
+    let text = raw.trim();
+    if text.is_empty() || text.len() > MAX_STRATEGY_SUMMARY_LEN {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// Verify a revealed secret matches a prior commitment and is well-formed.
@@ -672,6 +714,44 @@ mod tests {
             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         assert_eq!(verify_reveal(&secret, &hash), Some(Throw::Paper));
         assert_eq!(verify_reveal(&make_secret(Throw::Rock, nonce), &hash), None);
+    }
+
+    #[test]
+    fn commit_hash_validation_requires_canonical_sha256_hex() {
+        assert!(validate_commit_hash(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!validate_commit_hash("deadbeef"));
+        assert!(!validate_commit_hash(
+            "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!validate_commit_hash(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg"
+        ));
+    }
+
+    #[test]
+    fn reveal_secret_validation_caps_and_parses_shape() {
+        let secret = make_secret(Throw::Rock, "0123456789abcdef0123456789abcdef");
+        assert!(validate_reveal_secret(&secret));
+        assert!(!validate_reveal_secret("rock:short"));
+        assert!(!validate_reveal_secret(&format!(
+            "rock:{}",
+            "a".repeat(300)
+        )));
+    }
+
+    #[test]
+    fn text_validators_trim_and_cap() {
+        assert_eq!(validate_chat("  hello  "), Some("hello"));
+        assert_eq!(validate_strategy_summary("  plan  "), Some("plan"));
+        assert_eq!(validate_chat(""), None);
+        assert_eq!(validate_strategy_summary(" \t "), None);
+        assert_eq!(validate_chat(&"x".repeat(MAX_CHAT_LEN + 1)), None);
+        assert_eq!(
+            validate_strategy_summary(&"x".repeat(MAX_STRATEGY_SUMMARY_LEN + 1)),
+            None
+        );
     }
 
     #[test]

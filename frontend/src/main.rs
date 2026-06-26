@@ -555,58 +555,83 @@ fn render_rounds(rounds: &[RoundRecord], summary: &MatchSummary) -> Html {
     }
 
     html! {
-        <div class="round-card-list">
+        <div class="round-thread">
             { for rounds.iter().map(|round| render_round(round, summary)) }
         </div>
     }
 }
 
 fn render_round(round: &RoundRecord, summary: &MatchSummary) -> Html {
-    let outcome = match round.outcome_a {
-        Outcome::Win => "a-win",
-        Outcome::Lose => "b-win",
-        Outcome::Tie => "tie",
+    let tie = round.outcome_a == Outcome::Tie;
+    let a_won = round.outcome_a == Outcome::Win;
+    let b_won = round.outcome_a == Outcome::Lose;
+    let divider = if tie {
+        format!(
+            "Round {} \u{00b7} attempt {} \u{2014} \u{1f91d} tie",
+            round.round_no, round.attempt_no
+        )
+    } else {
+        let winner = if a_won {
+            &summary.model_a
+        } else {
+            &summary.model_b
+        };
+        format!(
+            "Round {} \u{00b7} attempt {} \u{2014} \u{1f3c6} {winner}",
+            round.round_no, round.attempt_no
+        )
     };
     html! {
-        <article class={classes!("round-card", outcome)}>
-            <header>
-                <div>
-                    <span class="muted">{ format!("round {} · attempt {}", round.round_no, round.attempt_no) }</span>
-                    <h3>{ outcome_label(round.outcome_a, summary) }</h3>
-                </div>
-                <div class="throw-faceoff" aria-label="Throws">
-                    <span>{ throw_emoji(round.throw_a) }</span>
-                    <b>{ "vs" }</b>
-                    <span>{ throw_emoji(round.throw_b) }</span>
-                </div>
-            </header>
-            <div class="round-players">
-                { render_round_player(&summary.model_a, round.throw_a, round.strategy_summary_a.as_deref()) }
-                { render_round_player(&summary.model_b, round.throw_b, round.strategy_summary_b.as_deref()) }
-            </div>
-        </article>
+        <div class="round-group">
+            <div class="round-divider"><span>{ divider }</span></div>
+            { render_bubble(&summary.model_a, round.throw_a, round.strategy_summary_a.as_deref(), "left", a_won, tie) }
+            { render_bubble(&summary.model_b, round.throw_b, round.strategy_summary_b.as_deref(), "right", b_won, tie) }
+        </div>
     }
 }
 
-fn render_round_player(model: &str, throw: Throw, strategy_summary: Option<&str>) -> Html {
+fn render_bubble(
+    model: &str,
+    throw: Throw,
+    strategy_summary: Option<&str>,
+    side: &'static str,
+    won: bool,
+    tie: bool,
+) -> Html {
+    // 🏆 for the round winner, 🤝 on both bubbles for a tie, nothing for the loser.
+    let result = if won {
+        "\u{1f3c6}"
+    } else if tie {
+        "\u{1f91d}"
+    } else {
+        ""
+    };
+    let bubble_class = classes!("chat-bubble", won.then_some("winner"), tie.then_some("tie"));
     html! {
-        <section class="round-player">
-            <div class="throw-badge">
-                <span>{ throw_emoji(throw) }</span>
-                <div>
-                    <strong>{ model }</strong>
-                    <p>{ throw_label(throw) }</p>
-                </div>
-            </div>
-            <blockquote>
-                {
-                    match strategy_summary {
-                        Some(text) if !text.trim().is_empty() => html! { { text } },
-                        _ => html! { "No strategy summary recorded for this attempt." },
+        <div class={classes!("bubble-row", side)}>
+            <div class={bubble_class}>
+                <header>
+                    <span class="who">{ model }</span>
+                    <span class="throw-chip">{ throw_emoji(throw) }{ " " }{ throw_label(throw) }</span>
+                    {
+                        if result.is_empty() {
+                            html! {}
+                        } else {
+                            let title = if won { "round winner" } else { "tie" };
+                            html! { <span class="result-emoji" title={title} aria-label={title}>{ result }</span> }
+                        }
                     }
-                }
-            </blockquote>
-        </section>
+                </header>
+                <p class="bubble-body">
+                    {
+                        match strategy_summary {
+                            Some(text) if !text.trim().is_empty() => html! { { text } },
+                            _ => html! { <em class="muted">{ "no strategy summary recorded" }</em> },
+                        }
+                    }
+                </p>
+            </div>
+        </div>
     }
 }
 
@@ -1282,14 +1307,6 @@ fn throw_emoji(throw: Throw) -> &'static str {
         Throw::Rock => "\u{1faa8}",
         Throw::Paper => "\u{1f4c4}",
         Throw::Scissors => "\u{2702}\u{fe0f}",
-    }
-}
-
-fn outcome_label(outcome_a: Outcome, summary: &MatchSummary) -> String {
-    match outcome_a {
-        Outcome::Win => format!("{} wins", summary.model_a),
-        Outcome::Lose => format!("{} wins", summary.model_b),
-        Outcome::Tie => "tie".to_string(),
     }
 }
 

@@ -521,8 +521,8 @@ pub struct MatchDetail {
 // ---------------------------------------------------------------------------
 // HTTP play API — a curl-friendly REST polling shim over the same engine.
 // The token returned by register authenticates later calls; pass it as
-// `Authorization: Bearer <token>` (preferred) or `?token=<token>`. Treat the
-// token as a SECRET (it controls your player).
+// `Authorization: Bearer <token>`. Treat the token as a SECRET (it controls
+// your player).
 // ---------------------------------------------------------------------------
 
 /// `POST /api/play/register`.

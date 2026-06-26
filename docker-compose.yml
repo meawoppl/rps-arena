@@ -30,7 +30,6 @@ services:
       DATABASE_URL: "postgresql://skeleton:dev_password@db:5432/skeleton"
       HOST: "0.0.0.0"
       PORT: "3000"
-      SESSION_SECRET: "${SESSION_SECRET:-dev-secret-change-in-production-please-at-least-64-bytes}"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]

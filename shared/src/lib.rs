@@ -20,6 +20,7 @@ pub struct AllowedModelNames;
 
 impl AllowedModelNames {
     pub const MAX_LEN: usize = 96;
+    pub const HUMAN_DISPLAY_MAX_LEN: usize = 40;
 
     pub const EXACT: &'static [&'static str] =
         &["codex", "human", "example-agent", "reference-agent"];
@@ -88,6 +89,27 @@ impl AllowedModelNames {
             Self::FAMILY_PREFIXES.join(", ")
         )
     }
+
+    pub fn display_name_for(model: &str, requested: &str) -> Result<String, DisplayNameError> {
+        if model != "human" {
+            return Ok(model.to_string());
+        }
+
+        let display_name = requested.trim();
+        if display_name.is_empty() {
+            return Err(DisplayNameError::Empty);
+        }
+        if display_name.len() > Self::HUMAN_DISPLAY_MAX_LEN {
+            return Err(DisplayNameError::TooLong);
+        }
+        if !display_name
+            .chars()
+            .all(|c| c.is_ascii() && !c.is_ascii_control())
+        {
+            return Err(DisplayNameError::InvalidCharacters);
+        }
+        Ok(display_name.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +127,23 @@ impl ModelNameError {
             ModelNameError::TooLong => "model name too long",
             ModelNameError::InvalidCharacters => "model name contains unsupported characters",
             ModelNameError::UnknownFamily => "model family is not allowed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayNameError {
+    Empty,
+    TooLong,
+    InvalidCharacters,
+}
+
+impl DisplayNameError {
+    pub fn message(self) -> &'static str {
+        match self {
+            DisplayNameError::Empty => "display_name required",
+            DisplayNameError::TooLong => "display_name too long",
+            DisplayNameError::InvalidCharacters => "display_name contains unsupported characters",
         }
     }
 }
@@ -561,6 +600,38 @@ mod tests {
         assert_eq!(
             AllowedModelNames::normalize(&"gpt-".to_string().repeat(40)),
             Err(ModelNameError::TooLong)
+        );
+    }
+
+    #[test]
+    fn non_human_display_names_are_canonicalized_to_allowed_model() {
+        assert_eq!(
+            AllowedModelNames::display_name_for("claude-opus-4-8", "Definitely Codex").as_deref(),
+            Ok("claude-opus-4-8")
+        );
+        assert_eq!(
+            AllowedModelNames::display_name_for("codex", "Claude").as_deref(),
+            Ok("codex")
+        );
+    }
+
+    #[test]
+    fn human_display_names_are_limited_but_user_visible() {
+        assert_eq!(
+            AllowedModelNames::display_name_for("human", "  Alice  ").as_deref(),
+            Ok("Alice")
+        );
+        assert_eq!(
+            AllowedModelNames::display_name_for("human", ""),
+            Err(DisplayNameError::Empty)
+        );
+        assert_eq!(
+            AllowedModelNames::display_name_for("human", "x".repeat(41).as_str()),
+            Err(DisplayNameError::TooLong)
+        );
+        assert_eq!(
+            AllowedModelNames::display_name_for("human", "Alice\nBob"),
+            Err(DisplayNameError::InvalidCharacters)
         );
     }
 

@@ -30,7 +30,7 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run security audit
-        run: cargo audit
+        run: ./scripts/cargo-audit-policy.sh
 
   fmt:
     name: Rustfmt

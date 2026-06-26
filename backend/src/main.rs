@@ -11,14 +11,19 @@ mod schema;
 
 use crate::db::DbPool;
 use crate::game::Matchmaker;
+use anyhow::{Context, Result};
 use axum::{
+    http::{
+        header::{AUTHORIZATION, CONTENT_TYPE},
+        HeaderValue, Method,
+    },
     middleware,
     routing::{get, post},
     Router,
 };
 use clap::Parser;
 use std::{env, net::SocketAddr, sync::Arc};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use ws_bridge::WsEndpoint;
 
@@ -40,7 +45,7 @@ pub struct AppState {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Initialize tracing
@@ -90,11 +95,7 @@ async fn main() -> anyhow::Result<()> {
         http_sessions,
     });
 
-    // CORS
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = cors_layer(args.dev_mode)?;
 
     // Router
     let app = Router::new()
@@ -139,6 +140,49 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn cors_layer(dev_mode: bool) -> Result<CorsLayer> {
+    let layer = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE]);
+
+    match env::var("CORS_ALLOWED_ORIGINS") {
+        Ok(raw) => {
+            let raw = raw.trim();
+            if raw == "*" {
+                anyhow::ensure!(
+                    dev_mode,
+                    "CORS_ALLOWED_ORIGINS=* is only allowed with --dev-mode"
+                );
+                return Ok(layer.allow_origin(Any));
+            }
+
+            let origins = parse_cors_origins(raw)?;
+            Ok(layer.allow_origin(AllowOrigin::list(origins)))
+        }
+        Err(env::VarError::NotPresent) => Ok(layer),
+        Err(env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("CORS_ALLOWED_ORIGINS must be valid UTF-8")
+        }
+    }
+}
+
+fn parse_cors_origins(raw: &str) -> Result<Vec<HeaderValue>> {
+    let origins: Vec<HeaderValue> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .map(|origin| {
+            HeaderValue::from_str(origin).with_context(|| format!("invalid CORS origin `{origin}`"))
+        })
+        .collect::<Result<_>>()?;
+
+    anyhow::ensure!(
+        !origins.is_empty(),
+        "CORS_ALLOWED_ORIGINS must contain at least one origin"
+    );
+    Ok(origins)
+}
+
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -160,5 +204,27 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => tracing::info!("Received Ctrl+C, shutting down..."),
         _ = terminate => tracing::info!("Received SIGTERM, shutting down..."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_comma_separated_cors_origins() {
+        let origins = parse_cors_origins("https://rps.example, http://localhost:8080").unwrap();
+
+        assert_eq!(origins.len(), 2);
+        assert_eq!(origins[0], HeaderValue::from_static("https://rps.example"));
+        assert_eq!(
+            origins[1],
+            HeaderValue::from_static("http://localhost:8080")
+        );
+    }
+
+    #[test]
+    fn rejects_empty_cors_origin_list() {
+        assert!(parse_cors_origins(" , ").is_err());
     }
 }

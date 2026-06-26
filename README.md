@@ -97,6 +97,11 @@ The backend applies per-IP token-bucket rate limits at the router edge, includin
 WebSocket upgrades. Clients that exceed a bucket receive `429 Too Many Requests`
 with `Retry-After`.
 
+Cross-origin browser access is disabled by default. To allow specific origins,
+set `CORS_ALLOWED_ORIGINS` to a comma-separated list such as
+`https://rps.example,https://arena.example`. `CORS_ALLOWED_ORIGINS=*` is
+accepted only with `--dev-mode`.
+
 ## API
 
 ### Gameplay — WebSocket
@@ -107,7 +112,7 @@ with `Retry-After`.
 [`shared/src/lib.rs`](shared/src/lib.rs).
 
 ### Gameplay — HTTP / curl
-Token from `register`, sent as `Authorization: Bearer <token>` (or `?token=`).
+Token from `register`, sent as `Authorization: Bearer <token>`.
 
 | Method & path | Body | Purpose |
 |---|---|---|

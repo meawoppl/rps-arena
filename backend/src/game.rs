@@ -28,6 +28,20 @@ use crate::rules;
 /// window forfeits the round (`EndReason::Timeout`), so a stalled or vanished
 /// player can no longer deadlock the match (and leak its task/DB row).
 const TURN_DEADLINE: Duration = Duration::from_secs(30);
+/// Turn deadline for matches involving a human player (#48). Humans must read
+/// the board and type a required comment + strategy summary each commit, which
+/// is not realistic in 30s, so they were being force-forfeited. Still finite so
+/// an AFK human can't deadlock the match forever.
+const HUMAN_TURN_DEADLINE: Duration = Duration::from_secs(180);
+/// Per-phase turn deadline for a match between these two models. Matches with a
+/// human get [`HUMAN_TURN_DEADLINE`]; agent-vs-agent keeps the tight 30s (#48).
+fn turn_deadline_for(model_a: &str, model_b: &str) -> Duration {
+    if model_a == "human" || model_b == "human" {
+        HUMAN_TURN_DEADLINE
+    } else {
+        TURN_DEADLINE
+    }
+}
 /// Minimum interval between a player's *accepted* commits — at most one turn
 /// per second, so matches can't be ground out faster than realistic rates.
 const MIN_TURN_INTERVAL: Duration = Duration::from_secs(1);
@@ -454,6 +468,11 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
     let mut last_commit_a: Option<Instant> = None;
     let mut last_commit_b: Option<Instant> = None;
 
+    // Human players need longer than the agent-paced 30s to type a required
+    // comment + strategy and throw (#48). The model identities are fixed for the
+    // match, so decide the per-phase deadline once.
+    let turn_deadline = turn_deadline_for(&a.model, &b.model);
+
     'match_loop: loop {
         let mut attempt_no: u32 = 1;
         loop {
@@ -477,9 +496,9 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
                 rules: rules.clone(),
             });
 
-            let commit_deadline = Instant::now() + TURN_DEADLINE;
+            let commit_deadline = Instant::now() + turn_deadline;
             let commit_at = Utc::now()
-                + chrono::Duration::from_std(TURN_DEADLINE)
+                + chrono::Duration::from_std(turn_deadline)
                     .unwrap_or_else(|_| chrono::Duration::seconds(30));
             a.send(ServerMsg::TurnDeadline {
                 attempt_id,
@@ -525,9 +544,9 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
                 }
             };
 
-            let reveal_deadline = Instant::now() + TURN_DEADLINE;
+            let reveal_deadline = Instant::now() + turn_deadline;
             let reveal_at = Utc::now()
-                + chrono::Duration::from_std(TURN_DEADLINE)
+                + chrono::Duration::from_std(turn_deadline)
                     .unwrap_or_else(|_| chrono::Duration::seconds(30));
             a.send(ServerMsg::AwaitReveal { attempt_id });
             b.send(ServerMsg::AwaitReveal { attempt_id });
@@ -714,5 +733,24 @@ mod tests {
     fn invert_is_correct() {
         assert_eq!(invert(Outcome::Win), Outcome::Lose);
         assert_eq!(invert(Outcome::Tie), Outcome::Tie);
+    }
+
+    #[test]
+    fn human_matches_get_the_longer_turn_deadline() {
+        // Agent-vs-agent keeps the tight pace.
+        assert_eq!(
+            turn_deadline_for("claude-opus-4-8", "codex-5-5"),
+            TURN_DEADLINE
+        );
+        // A human on either seat gets the generous deadline (#48).
+        assert_eq!(
+            turn_deadline_for("human", "claude-opus-4-8"),
+            HUMAN_TURN_DEADLINE
+        );
+        assert_eq!(
+            turn_deadline_for("claude-opus-4-8", "human"),
+            HUMAN_TURN_DEADLINE
+        );
+        assert_eq!(turn_deadline_for("human", "human"), HUMAN_TURN_DEADLINE);
     }
 }

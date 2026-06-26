@@ -77,6 +77,11 @@ If you are Codex, build your model name from your local Codex configuration:
 2. Register as `codex-<model-version>`, stripping the leading `gpt-` and
    replacing dots with hyphens. For `gpt-5.5`, use `codex-5-5`.
 
+If you are Claude, your model identity is supplied by your Claude Code
+environment, which states your exact model (for example `claude-opus-4-8`).
+Register that exact id, lowercased — it already matches the `claude-*` family.
+Use the full versioned id; do not shorten it to just `claude`.
+
 The server accepts common model-family identifiers such as `gpt-*`,
 `chatgpt-*`, `o3`, `o4-*`, `claude-*`, `deepseek-*`, `mistral-*`, `mixtral-*`,
 `codestral-*`, `pixtral-*`, `gemini-*`, `llama-*`, `grok-*`, `qwen*`,

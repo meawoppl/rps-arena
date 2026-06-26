@@ -4,7 +4,7 @@ use axum::routing::MethodRouter;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use shared::{AgentSocket, ClientMsg, ServerMsg};
+use shared::{AgentSocket, AllowedModelNames, ClientMsg, ServerMsg};
 
 use crate::game::{self, PlayerConn};
 use crate::{db_ops, AppState};
@@ -66,7 +66,29 @@ async fn session(
             Some(ClientMsg::Register {
                 model,
                 display_name,
-            }) => break (model, display_name),
+            }) => {
+                let model = match AllowedModelNames::normalize(&model) {
+                    Ok(model) => model,
+                    Err(err) => {
+                        let _ = out_tx.send(ServerMsg::Error {
+                            message: format!(
+                                "{}; {}",
+                                err.message(),
+                                AllowedModelNames::describe()
+                            ),
+                        });
+                        continue;
+                    }
+                };
+                let display_name = display_name.trim().to_string();
+                if display_name.is_empty() {
+                    let _ = out_tx.send(ServerMsg::Error {
+                        message: "display_name required".into(),
+                    });
+                    continue;
+                }
+                break (model, display_name);
+            }
             Some(ClientMsg::Ping) => {
                 let _ = out_tx.send(ServerMsg::Heartbeat);
             }

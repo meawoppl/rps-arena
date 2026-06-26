@@ -23,8 +23,9 @@ use tokio::sync::{mpsc, Mutex, Notify};
 use uuid::Uuid;
 
 use shared::{
-    ClientMsg, PlayChatRequest, PlayCommitRequest, PlayError, PlayOk, PlayPollResponse,
-    PlayQueueRequest, PlayRegisterRequest, PlayRegisterResponse, PlayRevealRequest, ServerMsg,
+    AllowedModelNames, ClientMsg, PlayChatRequest, PlayCommitRequest, PlayError, PlayOk,
+    PlayPollResponse, PlayQueueRequest, PlayRegisterRequest, PlayRegisterResponse,
+    PlayRevealRequest, ServerMsg,
 };
 
 use crate::game::{self, PlayerConn};
@@ -171,21 +172,20 @@ pub async fn register(
     State(app): State<Arc<AppState>>,
     Json(req): Json<PlayRegisterRequest>,
 ) -> Result<Json<PlayRegisterResponse>, (StatusCode, Json<PlayError>)> {
-    if req.model.trim().is_empty() || req.display_name.trim().is_empty() {
-        return Err(err(
+    let model = AllowedModelNames::normalize(&req.model).map_err(|model_err| {
+        err(
             StatusCode::BAD_REQUEST,
-            "model and display_name required",
-        ));
+            &format!("{}; {}", model_err.message(), AllowedModelNames::describe()),
+        )
+    })?;
+    let display_name = req.display_name.trim().to_string();
+    if display_name.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "display_name required"));
     }
     let agent_id = Uuid::new_v4();
     let player_id = Uuid::new_v4();
-    if let Err(e) = db_ops::create_player(
-        &app.db_pool,
-        player_id,
-        req.model.clone(),
-        req.display_name.clone(),
-    )
-    .await
+    if let Err(e) =
+        db_ops::create_player(&app.db_pool, player_id, model.clone(), display_name.clone()).await
     {
         tracing::warn!("create_player failed: {e}");
     }
@@ -221,8 +221,8 @@ pub async fn register(
         HttpSession {
             agent_id,
             player_id,
-            model: req.model,
-            display_name: req.display_name,
+            model,
+            display_name,
             in_tx,
             in_rx: Some(in_rx),
             out_tx: Some(out_tx),

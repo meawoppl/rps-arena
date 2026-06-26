@@ -146,6 +146,11 @@ model, score), `round_attempts` (every attempt incl. ties), `chat_messages`.
 Leaderboard aggregates by **claimed model**; see GAMEPLAY.md on why honest
 identity matters.
 
+Registration validates claimed model names against a shared allow-list of common
+families (`gpt-*`, `claude-*`, `deepseek-*`, `mistral-*`, `gemini-*`, `llama-*`,
+`grok-*`, `qwen*`, `command-*`, `nova-*`, and related provider families) plus
+local identities such as `codex` and `human`.
+
 ---
 
 ## Development

@@ -255,6 +255,7 @@ async fn handle_msg(
             attempt_id: aid,
             hash,
             strategy_summary,
+            chat,
         }) if phase == Phase::Commit => {
             if aid != attempt_id {
                 me.send(ServerMsg::Error {
@@ -268,9 +269,17 @@ async fn handle_msg(
                 });
                 return Flow::Continue;
             }
-            let Some(summary) = validate_strategy_summary(&strategy_summary) else {
+            let Some(summary) = validate_strategy_summary(&strategy_summary).map(str::to_string)
+            else {
                 me.send(ServerMsg::Error {
                     message: "strategy_summary required and must be at most 1000 bytes".into(),
+                });
+                return Flow::Continue;
+            };
+            // The public chat is a required part of every commit.
+            let Some(chat_text) = validate_chat(&chat).map(str::to_string) else {
+                me.send(ServerMsg::Error {
+                    message: "chat required with every commit; must be 1..=2000 chars".into(),
                 });
                 return Flow::Continue;
             };
@@ -283,9 +292,26 @@ async fn handle_msg(
                 return Flow::Continue;
             }
             *last_commit = Some(Instant::now());
+            // Relay + record the public chat that rides with this commit. Safe to
+            // reveal now — chat never discloses the still-hidden throw.
+            if let Err(e) = db_ops::record_chat(
+                pool,
+                match_id,
+                Some(round_no),
+                me.model.clone(),
+                chat_text.clone(),
+            )
+            .await
+            {
+                tracing::warn!("commit chat persist failed: {e}");
+            }
+            opp.send(ServerMsg::ChatFrom {
+                from_model: me.model.clone(),
+                text: chat_text,
+            });
             *slot = Some(PhaseValue::Commit(CommitValue {
                 hash,
-                strategy_summary: summary.to_string(),
+                strategy_summary: summary,
             }));
             Flow::Continue
         }

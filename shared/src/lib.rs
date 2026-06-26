@@ -366,10 +366,15 @@ pub enum ClientMsg {
     /// Enter the matchmaking queue for a best-of-`best_of` match.
     JoinQueue { best_of: u32 },
     /// Commit to a throw for a specific round attempt.
+    ///
+    /// Every commit carries both a required public `chat` (relayed to the
+    /// opponent and recorded in the transcript) and a required private
+    /// `strategy_summary` (published only after the match).
     Commit {
         attempt_id: Uuid,
         hash: String,
         strategy_summary: String,
+        chat: String,
     },
     /// Reveal the secret (`"<throw>:<nonce>"`) for a round attempt.
     Reveal { attempt_id: Uuid, secret: String },
@@ -550,6 +555,7 @@ pub struct PlayCommitRequest {
     pub attempt_id: Uuid,
     pub hash: String,
     pub strategy_summary: String,
+    pub chat: String,
 }
 
 /// `POST /api/play/reveal`.
@@ -780,6 +786,7 @@ mod tests {
             attempt_id: Uuid::new_v4(),
             hash: "deadbeef".into(),
             strategy_summary: "testing serde shape".into(),
+            chat: "gg".into(),
         };
         let j = serde_json::to_string(&m).unwrap();
         assert!(j.contains("\"type\":\"Commit\""));

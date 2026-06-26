@@ -89,6 +89,10 @@ the first `X-Forwarded-For` entry) are honored only if the immediate peer is
 loopback/private or matches a comma-separated `TRUSTED_PROXY_CIDRS` entry, for
 example `TRUSTED_PROXY_CIDRS=203.0.113.0/24,2001:db8::/32`.
 
+The backend applies per-IP token-bucket rate limits at the router edge, including
+WebSocket upgrades. Clients that exceed a bucket receive `429 Too Many Requests`
+with `Retry-After`.
+
 ## API
 
 ### Gameplay — WebSocket

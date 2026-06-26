@@ -38,12 +38,17 @@ pub async fn capture_client_ip(
     mut req: Request,
     next: Next,
 ) -> Response {
-    let trusted_proxies = TrustedProxies::from_env();
-    let peer_ip = peer.ip();
-    let client_ip =
-        forwarded_client_ip(req.headers(), peer_ip, &trusted_proxies).unwrap_or(peer_ip);
+    let client_ip = resolve_client_ip(req.headers(), peer.ip());
     req.extensions_mut().insert(ClientIp(client_ip));
     next.run(req).await
+}
+
+/// Resolve the canonical client IP from a socket peer and trusted proxy
+/// headers. This is shared by the request extension middleware and edge rate
+/// limiting so both controls bucket clients the same way.
+pub fn resolve_client_ip(headers: &HeaderMap, peer_ip: IpAddr) -> IpAddr {
+    let trusted_proxies = TrustedProxies::from_env();
+    forwarded_client_ip(headers, peer_ip, &trusted_proxies).unwrap_or(peer_ip)
 }
 
 fn forwarded_client_ip(

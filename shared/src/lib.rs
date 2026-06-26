@@ -8,6 +8,116 @@ use uuid::Uuid;
 use ws_bridge::WsEndpoint;
 
 // ---------------------------------------------------------------------------
+// Model identity validation
+// ---------------------------------------------------------------------------
+
+/// Shared allow-list for claimed model identifiers.
+///
+/// The fast-moving families are intentionally prefix-based (`gpt-*`,
+/// `claude-*`, etc.) so new point releases can play without a code change while
+/// obviously unrelated leaderboard names are rejected.
+pub struct AllowedModelNames;
+
+impl AllowedModelNames {
+    pub const MAX_LEN: usize = 96;
+
+    pub const EXACT: &'static [&'static str] =
+        &["codex", "human", "example-agent", "reference-agent"];
+
+    pub const FAMILY_PREFIXES: &'static [&'static str] = &[
+        "gpt",
+        "chatgpt",
+        "o1",
+        "o3",
+        "o4",
+        "claude",
+        "deepseek",
+        "mistral",
+        "mixtral",
+        "ministral",
+        "magistral",
+        "codestral",
+        "pixtral",
+        "gemini",
+        "llama",
+        "grok",
+        "qwen",
+        "command",
+        "cohere",
+        "nova",
+        "titan",
+        "jamba",
+        "phi",
+        "yi",
+        "glm",
+        "ernie",
+        "kimi",
+        "sonar",
+        "perplexity",
+        "reka",
+    ];
+
+    pub fn normalize(input: &str) -> Result<String, ModelNameError> {
+        let model = input.trim().to_ascii_lowercase();
+        if model.is_empty() {
+            return Err(ModelNameError::Empty);
+        }
+        if model.len() > Self::MAX_LEN {
+            return Err(ModelNameError::TooLong);
+        }
+        if !model.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.' | ':' | '/')
+        }) {
+            return Err(ModelNameError::InvalidCharacters);
+        }
+        if Self::EXACT.contains(&model.as_str())
+            || Self::FAMILY_PREFIXES
+                .iter()
+                .any(|prefix| model_family_matches(&model, prefix))
+        {
+            Ok(model)
+        } else {
+            Err(ModelNameError::UnknownFamily)
+        }
+    }
+
+    pub fn describe() -> String {
+        format!(
+            "allowed exact names: {}; allowed model families/prefixes: {}",
+            Self::EXACT.join(", "),
+            Self::FAMILY_PREFIXES.join(", ")
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelNameError {
+    Empty,
+    TooLong,
+    InvalidCharacters,
+    UnknownFamily,
+}
+
+impl ModelNameError {
+    pub fn message(self) -> &'static str {
+        match self {
+            ModelNameError::Empty => "model required",
+            ModelNameError::TooLong => "model name too long",
+            ModelNameError::InvalidCharacters => "model name contains unsupported characters",
+            ModelNameError::UnknownFamily => "model family is not allowed",
+        }
+    }
+}
+
+fn model_family_matches(model: &str, prefix: &str) -> bool {
+    model == prefix
+        || model.strip_prefix(prefix).is_some_and(|rest| {
+            rest.starts_with(['-', '_', '.', ':', '/'])
+                || rest.chars().next().is_some_and(|c| c.is_ascii_digit())
+        })
+}
+
+// ---------------------------------------------------------------------------
 // WebSocket endpoint — agents connect here to play.
 // ---------------------------------------------------------------------------
 
@@ -400,6 +510,58 @@ mod tests {
         assert_eq!(serde_json::to_string(&Throw::Rock).unwrap(), "\"rock\"");
         assert_eq!(Throw::parse("scissors"), Some(Throw::Scissors));
         assert_eq!(Throw::parse("lizard"), None);
+    }
+
+    #[test]
+    fn allowed_model_names_accept_expected_families() {
+        for model in [
+            "gpt-4o",
+            "gpt-5.1",
+            "chatgpt-4o-latest",
+            "o3",
+            "o4-mini",
+            "claude-opus-4-8",
+            "claude-sonnet-4-5",
+            "deepseek-chat",
+            "deepseek-r1",
+            "mistral-large-latest",
+            "mixtral-8x7b",
+            "codestral-latest",
+            "pixtral-large",
+            "gemini-2.5-pro",
+            "llama-3.3-70b",
+            "grok-4",
+            "qwen3-coder",
+            "command-r-plus",
+            "nova-pro",
+            "phi-4",
+            "kimi-k2",
+            "sonar-pro",
+            "codex",
+            "human",
+        ] {
+            assert_eq!(
+                AllowedModelNames::normalize(model).as_deref(),
+                Ok(model.to_ascii_lowercase().as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn allowed_model_names_reject_unknown_or_malformed_names() {
+        assert_eq!(AllowedModelNames::normalize(""), Err(ModelNameError::Empty));
+        assert_eq!(
+            AllowedModelNames::normalize("unknown-model"),
+            Err(ModelNameError::UnknownFamily)
+        );
+        assert_eq!(
+            AllowedModelNames::normalize("gpt<script>"),
+            Err(ModelNameError::InvalidCharacters)
+        );
+        assert_eq!(
+            AllowedModelNames::normalize(&"gpt-".to_string().repeat(40)),
+            Err(ModelNameError::TooLong)
+        );
     }
 
     #[test]

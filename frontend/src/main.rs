@@ -551,54 +551,52 @@ fn render_transcript(detail: &MatchDetail) -> Html {
         return html! { <div class="empty">{ "No transcript recorded." }</div> };
     }
 
-    let mut thread: Vec<Html> = Vec::new();
+    let mut blocks: Vec<Html> = Vec::new();
 
-    // Pre-match chatter (no round attached) opens the thread.
-    for line in detail.chat.iter().filter(|c| c.round_no.is_none()) {
-        thread.push(speech_bubble(line, summary));
+    // Pre-match chatter (no round attached) opens the transcript.
+    let pre: Vec<&ChatRecord> = detail
+        .chat
+        .iter()
+        .filter(|c| c.round_no.is_none())
+        .collect();
+    if !pre.is_empty() {
+        blocks.push(html! {
+            <section class="round-block">
+                <div class="round-divider"><span>{ "Pre-match chat" }</span></div>
+                { render_convo(&pre, summary) }
+            </section>
+        });
     }
 
-    // Walk attempts in order; when a new round number starts, drop in that
-    // round's chat first, then each attempt's moves + thought bubbles.
-    let mut last_round: Option<u32> = None;
-    for round in &detail.rounds {
-        if Some(round.round_no) != last_round {
-            for line in detail
+    // One block per attempt; the round's chat hangs under its final attempt.
+    for (i, round) in detail.rounds.iter().enumerate() {
+        let last_of_round = detail
+            .rounds
+            .get(i + 1)
+            .is_none_or(|next| next.round_no != round.round_no);
+        let convo: Vec<&ChatRecord> = if last_of_round {
+            detail
                 .chat
                 .iter()
                 .filter(|c| c.round_no == Some(round.round_no))
-            {
-                thread.push(speech_bubble(line, summary));
-            }
-            last_round = Some(round.round_no);
-        }
-        let a_won = round.outcome_a == Outcome::Win;
-        let b_won = round.outcome_a == Outcome::Lose;
-        let tie = round.outcome_a == Outcome::Tie;
-        thread.push(round_divider(round, summary));
-        thread.push(move_bubble(
-            &summary.model_a,
-            round.throw_a,
-            "left",
-            a_won,
-            tie,
-        ));
-        thread.push(thought_bubble(round.strategy_summary_a.as_deref(), "left"));
-        thread.push(move_bubble(
-            &summary.model_b,
-            round.throw_b,
-            "right",
-            b_won,
-            tie,
-        ));
-        thread.push(thought_bubble(round.strategy_summary_b.as_deref(), "right"));
+                .collect()
+        } else {
+            Vec::new()
+        };
+        blocks.push(render_round_block(round, summary, &convo));
     }
 
-    html! { <div class="chat-transcript">{ for thread.into_iter() }</div> }
+    html! { <div class="match-transcript">{ for blocks.into_iter() }</div> }
 }
 
-fn round_divider(round: &RoundRecord, summary: &MatchSummary) -> Html {
-    let text = match round.outcome_a {
+/// One attempt: the two throws as large flanking emoji, a side-by-side pair of
+/// 💭 thinking bubbles (both players strategize at once), and the round's chat
+/// below.
+fn render_round_block(round: &RoundRecord, summary: &MatchSummary, convo: &[&ChatRecord]) -> Html {
+    let a_won = round.outcome_a == Outcome::Win;
+    let b_won = round.outcome_a == Outcome::Lose;
+    let tie = round.outcome_a == Outcome::Tie;
+    let header = match round.outcome_a {
         Outcome::Tie => format!(
             "Round {} \u{00b7} attempt {} \u{2014} \u{1f91d} tie",
             round.round_no, round.attempt_no
@@ -612,75 +610,77 @@ fn round_divider(round: &RoundRecord, summary: &MatchSummary) -> Html {
             round.round_no, round.attempt_no, summary.model_b
         ),
     };
-    html! { <div class="round-divider"><span>{ text }</span></div> }
+    html! {
+        <section class="round-block">
+            <div class="round-divider"><span>{ header }</span></div>
+            <div class="round-face">
+                <div class={classes!("throw-emoji", a_won.then_some("win"), tie.then_some("tie"))}
+                     title={throw_label(round.throw_a)} aria-label={format!("{} threw {}", summary.model_a, throw_label(round.throw_a))}>
+                    { throw_emoji(round.throw_a) }
+                </div>
+                <div class="round-center">
+                    <div class="thinking-pair">
+                        { thought_card(&summary.model_a, round.strategy_summary_a.as_deref(), a_won, tie) }
+                        { thought_card(&summary.model_b, round.strategy_summary_b.as_deref(), b_won, tie) }
+                    </div>
+                    {
+                        if convo.is_empty() {
+                            html! {}
+                        } else {
+                            html! { <div class="round-convo">{ render_convo(convo, summary) }</div> }
+                        }
+                    }
+                </div>
+                <div class={classes!("throw-emoji", b_won.then_some("win"), tie.then_some("tie"))}
+                     title={throw_label(round.throw_b)} aria-label={format!("{} threw {}", summary.model_b, throw_label(round.throw_b))}>
+                    { throw_emoji(round.throw_b) }
+                </div>
+            </div>
+        </section>
+    }
 }
 
-/// A player's throw for an attempt, with a winner/tie emoji.
-fn move_bubble(model: &str, throw: Throw, side: &'static str, won: bool, tie: bool) -> Html {
-    let result = if won {
-        "\u{1f3c6}"
-    } else if tie {
-        "\u{1f91d}"
-    } else {
-        ""
-    };
-    let bubble_class = classes!(
-        "chat-bubble",
-        "move",
+/// One player's private strategy summary as a 💭 thinking card.
+fn thought_card(model: &str, strategy: Option<&str>, won: bool, tie: bool) -> Html {
+    let cls = classes!(
+        "thought-card",
         won.then_some("winner"),
         tie.then_some("tie")
     );
     html! {
-        <div class={classes!("bubble-row", side)}>
-            <div class={bubble_class}>
-                <span class="who">{ model }</span>
-                <span class="throw-chip">{ throw_emoji(throw) }{ " " }{ throw_label(throw) }</span>
-                {
-                    if result.is_empty() {
-                        html! {}
-                    } else {
-                        let title = if won { "round winner" } else { "tie" };
-                        html! { <span class="result-emoji" title={title} aria-label={title}>{ result }</span> }
-                    }
-                }
-            </div>
-        </div>
-    }
-}
-
-/// The private strategy summary, rendered as an interleaved 💭 thought bubble.
-fn thought_bubble(strategy_summary: Option<&str>, side: &'static str) -> Html {
-    html! {
-        <div class={classes!("bubble-row", side)}>
-            <div class={classes!("thought-bubble", side)}>
+        <div class={cls}>
+            <header>
                 <span class="thought-emoji" aria-hidden="true">{ "\u{1f4ad}" }</span>
-                {
-                    match strategy_summary {
-                        Some(text) if !text.trim().is_empty() => html! { <p>{ text }</p> },
-                        _ => html! { <p class="muted"><em>{ "no strategy recorded" }</em></p> },
-                    }
+                <span class="who">{ model }</span>
+            </header>
+            {
+                match strategy {
+                    Some(text) if !text.trim().is_empty() => html! { <p>{ text }</p> },
+                    _ => html! { <p class="muted"><em>{ "no strategy recorded" }</em></p> },
                 }
-            </div>
+            }
         </div>
     }
 }
 
-/// A real chat line as a speech bubble, sided by who sent it.
-fn speech_bubble(line: &ChatRecord, summary: &MatchSummary) -> Html {
-    let side = if line.from_model == summary.model_a {
-        "left"
-    } else {
-        "right"
-    };
+/// The chat for a round (or pre-match), as a small conversation thread.
+fn render_convo(lines: &[&ChatRecord], summary: &MatchSummary) -> Html {
     html! {
-        <div class={classes!("bubble-row", side)}>
-            <div class="chat-bubble speech">
-                <header>
-                    <span class="who">{ &line.from_model }</span>
-                    <span class="muted">{ message_meta(line) }</span>
-                </header>
-                <p class="bubble-body">{ &line.text }</p>
-            </div>
+        <div class="convo">
+            { for lines.iter().map(|line| {
+                let side = if line.from_model == summary.model_a { "left" } else { "right" };
+                html! {
+                    <div class={classes!("convo-row", side)}>
+                        <div class="convo-bubble">
+                            <header>
+                                <span class="who">{ &line.from_model }</span>
+                                <span class="muted">{ message_meta(line) }</span>
+                            </header>
+                            <p>{ &line.text }</p>
+                        </div>
+                    </div>
+                }
+            }) }
         </div>
     }
 }

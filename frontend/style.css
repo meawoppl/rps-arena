@@ -673,8 +673,12 @@ tbody tr:last-child td {
         grid-template-columns: 1fr;
     }
 
-    .chat-bubble {
-        max-width: 88%;
+    .thinking-pair {
+        grid-template-columns: 1fr;
+    }
+
+    .throw-emoji {
+        font-size: 34px;
     }
 
     .scoreboard > div:last-child {
@@ -702,18 +706,25 @@ tbody tr:last-child td {
     color: #7dcfff;
 }
 
-/* Match transcript rendered as a chat-bubble thread: model A on the left,
-   model B on the right, a winner emoji per round. */
-.chat-transcript {
+/* Match transcript: one block per attempt — the two throws as large flanking
+   emoji, a side-by-side pair of 💭 thinking cards (both strategize at once),
+   and the round's chat conversation below. */
+.match-transcript {
+    display: grid;
+    gap: 8px;
+}
+
+.round-block {
     display: grid;
     gap: 6px;
+    margin-bottom: 14px;
 }
 
 .round-divider {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin: 14px 0 2px;
+    margin: 6px 0 2px;
     color: #9aa6b2;
     font-size: 13px;
     white-space: nowrap;
@@ -727,133 +738,141 @@ tbody tr:last-child td {
     background: #252d3a;
 }
 
-.bubble-row {
-    display: flex;
-}
-
-.bubble-row.right {
-    justify-content: flex-end;
-}
-
-.chat-bubble {
-    max-width: 76%;
-    min-width: 0;
-    padding: 9px 13px;
-    border: 1px solid #303846;
-    border-radius: 14px;
-    background: #1b212c;
-}
-
-.bubble-row.left .chat-bubble {
-    border-bottom-left-radius: 4px;
-}
-
-.bubble-row.right .chat-bubble {
-    background: #172136;
-    border-bottom-right-radius: 4px;
-}
-
-.chat-bubble.winner {
-    border-color: #9ece6a;
-    box-shadow: 0 0 0 1px rgba(158, 206, 106, 0.35);
-}
-
-.chat-bubble.tie {
-    border-color: #e0af68;
-}
-
-/* Move bubble: a compact inline row (player + throw chip + result emoji). */
-.chat-bubble.move {
+.round-face {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 14px;
 }
 
-.chat-bubble > header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
-}
-
-.chat-bubble .who {
-    font-weight: 700;
-    color: #f0f4f8;
-    overflow-wrap: anywhere;
-}
-
-.chat-bubble .throw-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 1px 8px;
-    border-radius: 999px;
-    background: #10141d;
-    color: #9aa6b2;
-    font-size: 13px;
-    white-space: nowrap;
-}
-
-.chat-bubble .result-emoji {
-    margin-left: auto;
-    font-size: 18px;
+.throw-emoji {
+    flex: 0 0 auto;
+    font-size: 52px;
     line-height: 1;
+    filter: grayscale(0.4);
+    opacity: 0.65;
 }
 
-.chat-bubble .bubble-body {
-    margin: 0;
-    color: #d8dee9;
-    line-height: 1.45;
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
+.throw-emoji.win {
+    filter: none;
+    opacity: 1;
+    transform: scale(1.12);
+    text-shadow: 0 0 14px rgba(158, 206, 106, 0.6);
 }
 
-/* Thought bubble: the private strategy, visually distinct from speech —
-   a dashed cloud, italic, with a little trailing dot like a comic thought. */
-.thought-bubble {
-    position: relative;
-    display: flex;
-    gap: 8px;
-    max-width: 72%;
+.throw-emoji.tie {
+    filter: none;
+    opacity: 0.9;
+}
+
+.round-center {
+    flex: 1 1 auto;
     min-width: 0;
-    margin: 1px 0 4px;
-    padding: 7px 13px;
+    display: grid;
+    gap: 8px;
+}
+
+.thinking-pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.thought-card {
+    min-width: 0;
+    padding: 9px 12px;
     border: 1px dashed #3b4660;
-    border-radius: 16px;
+    border-radius: 12px;
     background: rgba(122, 162, 247, 0.06);
     color: #aeb7c6;
     font-style: italic;
 }
 
-.thought-bubble::after {
-    content: "";
-    position: absolute;
-    bottom: -7px;
-    width: 8px;
-    height: 8px;
-    border: 1px dashed #3b4660;
-    border-radius: 50%;
-    background: #1a1b26;
+.thought-card.winner {
+    border-style: solid;
+    border-color: #9ece6a;
+    background: rgba(158, 206, 106, 0.08);
 }
 
-.thought-bubble.left::after {
-    left: 18px;
+.thought-card.tie {
+    border-color: #e0af68;
 }
 
-.thought-bubble.right::after {
-    right: 18px;
-}
-
-.thought-emoji {
-    flex: 0 0 auto;
-    font-size: 15px;
-    line-height: 1.5;
+.thought-card > header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
     font-style: normal;
 }
 
-.thought-bubble p {
+.thought-card .thought-emoji {
+    font-size: 15px;
+    line-height: 1;
+}
+
+.thought-card .who {
+    font-weight: 700;
+    color: #f0f4f8;
+    overflow-wrap: anywhere;
+}
+
+.thought-card p {
     margin: 0;
     line-height: 1.45;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+/* The conversation (chat) for the round, below the thinking. */
+.round-convo {
+    padding-top: 6px;
+    border-top: 1px solid #20262f;
+}
+
+.convo {
+    display: grid;
+    gap: 6px;
+}
+
+.convo-row {
+    display: flex;
+}
+
+.convo-row.right {
+    justify-content: flex-end;
+}
+
+.convo-bubble {
+    max-width: 80%;
+    min-width: 0;
+    padding: 6px 11px;
+    border: 1px solid #303846;
+    border-radius: 12px;
+    background: #1b212c;
+}
+
+.convo-row.right .convo-bubble {
+    background: #172136;
+}
+
+.convo-bubble > header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 2px;
+}
+
+.convo-bubble .who {
+    font-weight: 700;
+    color: #f0f4f8;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.convo-bubble p {
+    margin: 0;
+    color: #d8dee9;
+    line-height: 1.4;
     overflow-wrap: anywhere;
     white-space: pre-wrap;
 }

@@ -1,3 +1,4 @@
+mod client_ip;
 mod db;
 mod db_ops;
 mod embedded_assets;
@@ -10,11 +11,12 @@ mod schema;
 use crate::db::DbPool;
 use crate::game::Matchmaker;
 use axum::{
+    middleware,
     routing::{get, post},
     Router,
 };
 use clap::Parser;
-use std::{env, sync::Arc};
+use std::{env, net::SocketAddr, sync::Arc};
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use ws_bridge::WsEndpoint;
@@ -110,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
             handlers::websocket::handler(app_state.clone()),
         )
         .fallback(axum::routing::get(embedded_assets::serve_embedded_frontend))
+        .layer(middleware::from_fn(client_ip::capture_client_ip))
         .layer(cors);
 
     // Bind and serve
@@ -120,9 +123,12 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("Listening on {}", listener.local_addr()?);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     Ok(())
 }

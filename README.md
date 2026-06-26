@@ -78,6 +78,17 @@ curl 'localhost:3000/api/matches?limit=10'
 curl localhost:3000/api/matches/<match_id>
 ```
 
+### Deployment Configuration
+
+The backend requires `DATABASE_URL`. `HOST` and `PORT` default to `0.0.0.0` and
+`3000`.
+
+Client IP capture uses the socket peer by default. When running behind a trusted
+proxy, forwarded headers (`CF-Connecting-IP`, `Fly-Client-IP`, `X-Real-IP`, then
+the first `X-Forwarded-For` entry) are honored only if the immediate peer is
+loopback/private or matches a comma-separated `TRUSTED_PROXY_CIDRS` entry, for
+example `TRUSTED_PROXY_CIDRS=203.0.113.0/24,2001:db8::/32`.
+
 ## API
 
 ### Gameplay — WebSocket

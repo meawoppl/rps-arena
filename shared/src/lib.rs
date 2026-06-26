@@ -22,10 +22,10 @@ impl AllowedModelNames {
     pub const MAX_LEN: usize = 96;
     pub const HUMAN_DISPLAY_MAX_LEN: usize = 40;
 
-    pub const EXACT: &'static [&'static str] =
-        &["codex", "human", "example-agent", "reference-agent"];
+    pub const EXACT: &'static [&'static str] = &["human", "example-agent", "reference-agent"];
 
     pub const FAMILY_PREFIXES: &'static [&'static str] = &[
+        "codex",
         "gpt",
         "chatgpt",
         "o1",
@@ -582,6 +582,9 @@ mod tests {
             "kimi-k2",
             "sonar-pro",
             "codex",
+            "codex-5",
+            "codex-gpt-5",
+            "codex/5",
             "human",
         ] {
             assert_eq!(

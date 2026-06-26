@@ -141,5 +141,8 @@ async fn session(
         out: out_tx,
         inbox: in_rx,
     };
-    state.matchmaker.enqueue(best_of, player).await;
+    // TODO(#32): thread the real client IP here once ws_bridge exposes request
+    // extensions (Codex's ClientIp). Until then WS players are matched without
+    // the per-IP self-pairing/concurrency guard; HTTP players are covered.
+    state.matchmaker.enqueue(best_of, None, player).await;
 }

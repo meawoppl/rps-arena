@@ -10,6 +10,7 @@
 //! player.
 
 use std::collections::{HashMap, VecDeque};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -29,6 +30,7 @@ use shared::{
     PlayRevealRequest, ServerMsg,
 };
 
+use crate::client_ip::ClientIp;
 use crate::game::{self, PlayerConn};
 use crate::{db_ops, AppState};
 
@@ -67,6 +69,9 @@ pub struct HttpSession {
     /// Timestamp of the last accepted (forwarded) commit — enforces #29's
     /// "at most one turn per second" before the commit reaches the engine.
     last_commit_at: Option<Instant>,
+    /// Client IP captured at register, used by the matchmaker for the
+    /// self-pairing guard + per-IP concurrency cap (#32).
+    ip: Option<IpAddr>,
 }
 
 pub type HttpSessions = Arc<Mutex<HashMap<Uuid, HttpSession>>>;
@@ -153,6 +158,7 @@ fn idempotency_of(prior: Option<&String>, incoming: &str) -> Idempotency {
 
 pub async fn register(
     State(app): State<Arc<AppState>>,
+    ClientIp(client_ip): ClientIp,
     Json(req): Json<PlayRegisterRequest>,
 ) -> Result<Json<PlayRegisterResponse>, (StatusCode, Json<PlayError>)> {
     let model = AllowedModelNames::normalize(&req.model).map_err(|model_err| {
@@ -214,6 +220,7 @@ pub async fn register(
             queued: false,
             last_seen: Instant::now(),
             last_commit_at: None,
+            ip: Some(client_ip),
         },
     );
 
@@ -230,7 +237,7 @@ pub async fn queue(
         .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
     let best_of = game::sanitize_best_of(req.best_of);
 
-    let player = {
+    let (ip, player) = {
         let mut sessions = app.http_sessions.lock().await;
         let s = sessions
             .get_mut(&token)
@@ -245,17 +252,20 @@ pub async fn queue(
             .ok_or_else(|| err(StatusCode::BAD_REQUEST, "session not joinable"))?;
         let out_tx = s.out_tx.take().expect("out_tx present with in_rx");
         s.queued = true;
-        PlayerConn {
-            agent_id: s.agent_id,
-            player_id: s.player_id,
-            model: s.model.clone(),
-            display_name: s.display_name.clone(),
-            out: out_tx,
-            inbox: in_rx,
-        }
+        (
+            s.ip,
+            PlayerConn {
+                agent_id: s.agent_id,
+                player_id: s.player_id,
+                model: s.model.clone(),
+                display_name: s.display_name.clone(),
+                out: out_tx,
+                inbox: in_rx,
+            },
+        )
     };
 
-    app.matchmaker.enqueue(best_of, player).await;
+    app.matchmaker.enqueue(best_of, ip, player).await;
     Ok(Json(PlayOk { ok: true }))
 }
 

@@ -6,6 +6,7 @@
 //! which owns both players for the life of the match.
 
 use std::collections::{HashMap, VecDeque};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,6 +31,9 @@ const TURN_DEADLINE: Duration = Duration::from_secs(30);
 /// Minimum interval between a player's *accepted* commits — at most one turn
 /// per second, so matches can't be ground out faster than realistic rates.
 const MIN_TURN_INTERVAL: Duration = Duration::from_secs(1);
+/// Max simultaneous in-progress matches per client IP (#32) — caps the
+/// throughput one actor can use to grind the leaderboard.
+const MAX_MATCHES_PER_IP: usize = 2;
 
 /// A connected player from the engine's point of view.
 pub struct PlayerConn {
@@ -58,10 +62,17 @@ pub fn sanitize_best_of(requested: u32) -> u32 {
     }
 }
 
-/// Matchmaking queue, keyed by requested best-of.
+/// A waiting player plus its (optional) client IP.
+type Waiting = (Option<IpAddr>, PlayerConn);
+
+/// Matchmaking queue, keyed by requested best-of. Each waiting player carries
+/// its (optional) client IP so the matchmaker can avoid self-play and cap
+/// concurrency per IP.
 #[derive(Clone)]
 pub struct Matchmaker {
-    queue: Arc<Mutex<HashMap<u32, VecDeque<PlayerConn>>>>,
+    queue: Arc<Mutex<HashMap<u32, VecDeque<Waiting>>>>,
+    /// In-progress match count per client IP.
+    active_by_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pool: DbPool,
 }
 
@@ -69,26 +80,67 @@ impl Matchmaker {
     pub fn new(pool: DbPool) -> Self {
         Self {
             queue: Arc::new(Mutex::new(HashMap::new())),
+            active_by_ip: Arc::new(Mutex::new(HashMap::new())),
             pool,
         }
     }
 
-    /// Enqueue a player. If an opponent waits for the same best-of, pair them
-    /// and spawn the match; otherwise hold the player in the queue.
-    pub async fn enqueue(&self, best_of: u32, player: PlayerConn) {
+    /// Enqueue a player. Pairs with a waiting opponent from a *different* IP
+    /// (no self-play, #32) and spawns the match; otherwise holds the player.
+    /// Refuses if this IP already has [`MAX_MATCHES_PER_IP`] matches running.
+    pub async fn enqueue(&self, best_of: u32, ip: Option<IpAddr>, player: PlayerConn) {
+        // Per-IP concurrent-match cap.
+        if let Some(addr) = ip {
+            let active = self.active_by_ip.lock().await;
+            if active.get(&addr).copied().unwrap_or(0) >= MAX_MATCHES_PER_IP {
+                player.send(ServerMsg::Error {
+                    message: "too many concurrent matches from your network; finish one first"
+                        .into(),
+                });
+                return;
+            }
+        }
+
         let mut q = self.queue.lock().await;
         let dq = q.entry(best_of).or_default();
-        if let Some(opponent) = dq.pop_front() {
+        // Anti self-play: only pair with an opponent on a different IP (when
+        // both IPs are known). Unknown IP on either side falls back to pairing.
+        let opp_idx = dq.iter().position(|(opp_ip, _)| match (opp_ip, ip) {
+            (Some(a), Some(b)) => *a != b,
+            _ => true,
+        });
+        if let Some(i) = opp_idx {
+            let (opp_ip, opponent) = dq.remove(i).expect("index came from position()");
             drop(q);
+            // Reserve a concurrency slot for each known IP; released when the
+            // match task finishes.
+            {
+                let mut active = self.active_by_ip.lock().await;
+                for addr in [opp_ip, ip].into_iter().flatten() {
+                    *active.entry(addr).or_insert(0) += 1;
+                }
+            }
             let pool = self.pool.clone();
-            tokio::spawn(async move { run_match(pool, best_of, opponent, player).await });
+            let active_by_ip = self.active_by_ip.clone();
+            tokio::spawn(async move {
+                run_match(pool, best_of, opponent, player).await;
+                let mut active = active_by_ip.lock().await;
+                for addr in [opp_ip, ip].into_iter().flatten() {
+                    if let Some(c) = active.get_mut(&addr) {
+                        *c = c.saturating_sub(1);
+                        if *c == 0 {
+                            active.remove(&addr);
+                        }
+                    }
+                }
+            });
         } else {
             let pos = dq.len() as u32 + 1;
             player.send(ServerMsg::Queued {
                 best_of,
                 position: pos,
             });
-            dq.push_back(player);
+            dq.push_back((ip, player));
         }
     }
 }

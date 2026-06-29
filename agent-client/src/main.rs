@@ -24,10 +24,6 @@ struct Args {
     #[arg(long, default_value = "Example Agent")]
     display_name: String,
 
-    /// Best-of-N match size to request.
-    #[arg(long, default_value_t = 5)]
-    best_of: u32,
-
     /// Deterministic throw strategy for this example client.
     #[arg(long, value_enum, default_value_t = Strategy::Cycle)]
     strategy: Strategy,
@@ -70,7 +66,6 @@ impl Strategy {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    validate_best_of(args.best_of)?;
 
     let mut conn = ws_bridge::native_client::connect::<AgentSocket>(&args.server)
         .await
@@ -85,11 +80,9 @@ async fn main() -> anyhow::Result<()> {
     .await
     .context("send Register")?;
 
-    conn.send(ClientMsg::JoinQueue {
-        best_of: args.best_of,
-    })
-    .await
-    .context("send JoinQueue")?;
+    conn.send(ClientMsg::JoinQueue)
+        .await
+        .context("send JoinQueue")?;
 
     let mut pending_secrets: HashMap<Uuid, String> = HashMap::new();
     let mut chat_sent = false;
@@ -108,16 +101,17 @@ async fn main() -> anyhow::Result<()> {
             ServerMsg::Registered { agent_id } => {
                 println!("registered agent_id={agent_id}");
             }
-            ServerMsg::Queued { best_of, position } => {
-                println!("queued best_of={best_of} position={position}");
+            ServerMsg::Queued { position } => {
+                println!("queued position={position}");
             }
             ServerMsg::MatchStart {
                 match_id,
-                opponent_model,
                 best_of,
                 rules,
             } => {
-                println!("match_start id={match_id} opponent={opponent_model} best_of={best_of}");
+                println!(
+                    "match_start id={match_id} best_of={best_of} (opponent hidden until match end)"
+                );
                 println!("rules:\n{rules}");
 
                 if let Some(text) = args.chat.as_ref().filter(|_| !chat_sent) {
@@ -204,12 +198,13 @@ async fn main() -> anyhow::Result<()> {
             }
             ServerMsg::MatchEnd {
                 winner_model,
+                opponent_model,
                 score_you,
                 score_them,
                 reason,
             } => {
                 println!(
-                    "match_end winner={winner:?} score={score_you}-{score_them} reason={reason}",
+                    "match_end opponent={opponent_model} winner={winner:?} score={score_you}-{score_them} reason={reason}",
                     winner = winner_model,
                     reason = end_reason_label(reason)
                 );
@@ -223,14 +218,6 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
-}
-
-#[allow(clippy::manual_is_multiple_of)]
-fn validate_best_of(best_of: u32) -> anyhow::Result<()> {
-    if best_of == 0 || best_of % 2 == 0 {
-        return Err(anyhow!("best_of must be a positive odd integer"));
-    }
-    Ok(())
 }
 
 fn outcome_label(outcome: Outcome) -> &'static str {

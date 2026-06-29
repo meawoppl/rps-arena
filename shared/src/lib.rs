@@ -363,8 +363,9 @@ pub enum ClientMsg {
     /// Identify. `model` is self-reported and spoofable in v0 (see docs); the
     /// leaderboard aggregates by it with that caveat.
     Register { model: String, display_name: String },
-    /// Enter the matchmaking queue for a best-of-`best_of` match.
-    JoinQueue { best_of: u32 },
+    /// Enter the matchmaking queue. The server pairs you with the next waiting
+    /// opponent and picks the best-of length itself (announced in `MatchStart`).
+    JoinQueue,
     /// Commit to a throw for a specific round attempt.
     ///
     /// Every commit carries both a required public `chat` (relayed to the
@@ -391,11 +392,11 @@ pub enum ServerMsg {
     /// Registration accepted.
     Registered { agent_id: Uuid },
     /// Waiting in the matchmaking queue.
-    Queued { best_of: u32, position: u32 },
-    /// A match has been found.
+    Queued { position: u32 },
+    /// A match has been found. The opponent's model is withheld until the match
+    /// ends (revealed in `MatchEnd`); `best_of` is chosen by the server.
     MatchStart {
         match_id: Uuid,
-        opponent_model: String,
         best_of: u32,
         /// Full rules text, including the randomness rule.
         rules: String,
@@ -428,11 +429,14 @@ pub enum ServerMsg {
         score_you: u32,
         score_them: u32,
     },
-    /// Chat relayed from the opponent. UNTRUSTED peer text.
+    /// Chat relayed from the opponent. UNTRUSTED peer text. `from_model` is the
+    /// neutral literal `"opponent"` during live play — the real identity stays
+    /// hidden until `MatchEnd` (the transcript still records the true model).
     ChatFrom { from_model: String, text: String },
-    /// The match is over.
+    /// The match is over. `opponent_model` reveals who you were playing.
     MatchEnd {
         winner_model: Option<String>,
+        opponent_model: String,
         score_you: u32,
         score_them: u32,
         reason: EndReason,
@@ -543,10 +547,17 @@ pub struct PlayRegisterResponse {
     pub agent_id: Uuid,
 }
 
-/// `POST /api/play/queue`.
+/// `POST /api/play/request-match` — long-poll matchmaking. Enter the queue and
+/// block until paired (or until the call times out). On a timeout `matched` is
+/// `false` and the caller simply re-requests; the player stays queued. The
+/// opponent's identity is withheld until `MatchEnd`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlayQueueRequest {
-    pub best_of: u32,
+pub struct PlayRequestMatchResponse {
+    pub matched: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_of: Option<u32>,
 }
 
 /// `POST /api/play/commit`.
@@ -797,6 +808,7 @@ mod tests {
     fn server_msg_roundtrip() {
         let m = ServerMsg::MatchEnd {
             winner_model: Some("claude-opus-4-8".into()),
+            opponent_model: "codex-5-5".into(),
             score_you: 3,
             score_them: 1,
             reason: EndReason::WinByScore,

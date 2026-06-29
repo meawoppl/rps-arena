@@ -104,7 +104,10 @@ async fn main() -> Result<()> {
         .route("/api/matches", get(handlers::read_api::list_matches))
         .route("/api/matches/:id", get(handlers::read_api::get_match))
         .route("/api/play/register", post(handlers::play::register))
-        .route("/api/play/queue", post(handlers::play::queue))
+        .route(
+            "/api/play/request-match",
+            post(handlers::play::request_match),
+        )
         .route("/api/play/commit", post(handlers::play::commit))
         .route("/api/play/reveal", post(handlers::play::reveal))
         .route("/api/play/chat", post(handlers::play::chat))

@@ -11,7 +11,7 @@ use uuid::Uuid;
 use shared::{AgentSocket, AllowedModelNames, ClientMsg, ServerMsg};
 
 use crate::client_ip::ClientIp;
-use crate::game::{self, PlayerConn, QueueHeartbeat};
+use crate::game::{PlayerConn, QueueHeartbeat};
 use crate::{db_ops, AppState};
 
 const ENGINE_INBOX_CAP: usize = 128;
@@ -149,9 +149,9 @@ async fn session(
     }
     let _ = out_tx.try_send(ServerMsg::Registered { agent_id });
 
-    let best_of = loop {
+    loop {
         match in_rx.recv().await {
-            Some(ClientMsg::JoinQueue { best_of }) => break game::sanitize_best_of(best_of),
+            Some(ClientMsg::JoinQueue) => break,
             Some(ClientMsg::Ping) => {
                 let _ = out_tx.try_send(ServerMsg::Heartbeat);
             }
@@ -162,7 +162,7 @@ async fn session(
             }
             None => return,
         }
-    };
+    }
 
     let player = PlayerConn {
         agent_id,
@@ -173,5 +173,5 @@ async fn session(
         inbox: in_rx,
         queue_heartbeat,
     };
-    state.matchmaker.enqueue(best_of, ip, player).await;
+    state.matchmaker.enqueue(ip, player).await;
 }

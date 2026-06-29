@@ -299,6 +299,13 @@ fn load_match_summaries(
 
 fn load_match_detail(conn: &mut PgConnection, match_id: Uuid) -> Result<MatchDetail, ReadError> {
     let match_row = load_match_by_id(conn, match_id)?;
+    // Public match detail is finished-only, like the list/leaderboard. While a
+    // match is in progress, exposing it would leak the opponent's identity
+    // (model_a/model_b + chat attribution) that the protocol withholds until
+    // MatchEnd, so an in-progress match reads as not found.
+    if match_row.status != "finished" {
+        return Err(ReadError::NotFound);
+    }
     let participants = load_participants(conn, &[match_id]).map_err(ReadError::Db)?;
     let participants_by_match = group_participants(participants);
     let seats = seats_for(&participants_by_match, match_id).ok_or_else(|| {
@@ -306,18 +313,12 @@ fn load_match_detail(conn: &mut PgConnection, match_id: Uuid) -> Result<MatchDet
     })?;
     let summary = to_summary(&match_row, &seats).map_err(ReadError::InvalidData)?;
 
-    let mut rounds = load_rounds(conn, &[match_id])
+    let rounds = load_rounds(conn, &[match_id])
         .map_err(ReadError::Db)?
         .into_iter()
         .map(to_round_record)
         .collect::<Result<Vec<_>, _>>()
         .map_err(ReadError::InvalidData)?;
-    if match_row.status != "finished" {
-        for round in &mut rounds {
-            round.strategy_summary_a = None;
-            round.strategy_summary_b = None;
-        }
-    }
 
     let chat = load_chat(conn, match_id)
         .map_err(ReadError::Db)?

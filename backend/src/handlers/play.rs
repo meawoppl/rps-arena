@@ -26,12 +26,12 @@ use uuid::Uuid;
 use shared::{
     validate_chat, validate_commit_hash, validate_reveal_secret, validate_strategy_summary,
     AllowedModelNames, ClientMsg, PlayChatRequest, PlayCommitRequest, PlayError, PlayOk,
-    PlayPollResponse, PlayQueueRequest, PlayRegisterRequest, PlayRegisterResponse,
+    PlayPollResponse, PlayRegisterRequest, PlayRegisterResponse, PlayRequestMatchResponse,
     PlayRevealRequest, ServerMsg,
 };
 
 use crate::client_ip::ClientIp;
-use crate::game::{self, PlayerConn, QueueHeartbeat};
+use crate::game::{PlayerConn, QueueHeartbeat};
 use crate::{db_ops, AppState};
 
 /// Max buffered server messages per HTTP session before we cut it loose.
@@ -226,45 +226,115 @@ pub async fn register(
     Ok(Json(PlayRegisterResponse { token, agent_id }))
 }
 
-pub async fn queue(
+/// How long a single `request-match` call blocks before returning `matched:
+/// false`. The caller simply re-requests; the player stays queued meanwhile.
+const REQUEST_MATCH_WAIT: Duration = Duration::from_secs(25);
+
+/// Long-poll matchmaking. Enters the queue on the first call and blocks until
+/// the match starts (or the wait elapses). The server picks the opponent and
+/// best-of; the opponent's identity is withheld until `MatchEnd`.
+pub async fn request_match(
     State(app): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(req): Json<PlayQueueRequest>,
-) -> Result<Json<PlayOk>, (StatusCode, Json<PlayError>)> {
+) -> Result<Json<PlayRequestMatchResponse>, (StatusCode, Json<PlayError>)> {
     let token = token_of(&headers).ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token"))?;
-    let best_of = game::sanitize_best_of(req.best_of);
 
-    let (ip, player) = {
+    // Enqueue on the first call; on retries we just keep waiting (the player
+    // stays queued, so re-requesting must not re-enqueue).
+    let (to_enqueue, outbox, notify) = {
         let mut sessions = app.http_sessions.lock().await;
         let s = sessions
             .get_mut(&token)
             .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unknown token"))?;
         s.last_seen = Instant::now();
-        if s.queued {
-            return Err(err(StatusCode::BAD_REQUEST, "already queued"));
-        }
-        let in_rx = s
-            .in_rx
-            .take()
-            .ok_or_else(|| err(StatusCode::BAD_REQUEST, "session not joinable"))?;
-        let out_tx = s.out_tx.take().expect("out_tx present with in_rx");
-        s.queued = true;
-        (
-            s.ip,
-            PlayerConn {
-                agent_id: s.agent_id,
-                player_id: s.player_id,
-                model: s.model.clone(),
-                display_name: s.display_name.clone(),
-                out: out_tx,
-                inbox: in_rx,
-                queue_heartbeat: s.queue_heartbeat.clone(),
-            },
-        )
+        s.queue_heartbeat.touch();
+        let to_enqueue = if s.queued {
+            None
+        } else {
+            let in_rx = s
+                .in_rx
+                .take()
+                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "session not joinable"))?;
+            let out_tx = s.out_tx.take().expect("out_tx present with in_rx");
+            s.queued = true;
+            Some((
+                s.ip,
+                PlayerConn {
+                    agent_id: s.agent_id,
+                    player_id: s.player_id,
+                    model: s.model.clone(),
+                    display_name: s.display_name.clone(),
+                    out: out_tx,
+                    inbox: in_rx,
+                    queue_heartbeat: s.queue_heartbeat.clone(),
+                },
+            ))
+        };
+        (to_enqueue, s.outbox.clone(), s.notify.clone())
     };
 
-    app.matchmaker.enqueue(best_of, ip, player).await;
-    Ok(Json(PlayOk { ok: true }))
+    if let Some((ip, player)) = to_enqueue {
+        app.matchmaker.enqueue(ip, player).await;
+    }
+
+    // Block until MatchStart lands in the outbox (or the wait elapses).
+    let deadline = Instant::now() + REQUEST_MATCH_WAIT;
+    loop {
+        match take_match_start(&outbox).await? {
+            MatchWait::Started { match_id, best_of } => {
+                return Ok(Json(PlayRequestMatchResponse {
+                    matched: true,
+                    match_id: Some(match_id),
+                    best_of: Some(best_of),
+                }))
+            }
+            MatchWait::Waiting => {}
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(Json(PlayRequestMatchResponse {
+                matched: false,
+                match_id: None,
+                best_of: None,
+            }));
+        }
+        let _ = tokio::time::timeout(remaining, notify.notified()).await;
+    }
+}
+
+enum MatchWait {
+    Started { match_id: Uuid, best_of: u32 },
+    Waiting,
+}
+
+/// Consume leading queue-position chatter and, if present, the `MatchStart` at
+/// the front of the outbox (leaving later messages for `poll`). Surfaces an
+/// enqueue rejection (e.g. the per-IP concurrency cap) as an HTTP error.
+async fn take_match_start(
+    outbox: &Arc<Mutex<VecDeque<ServerMsg>>>,
+) -> Result<MatchWait, (StatusCode, Json<PlayError>)> {
+    let mut ob = outbox.lock().await;
+    while matches!(ob.front(), Some(ServerMsg::Queued { .. })) {
+        ob.pop_front();
+    }
+    match ob.front() {
+        Some(ServerMsg::MatchStart {
+            match_id, best_of, ..
+        }) => {
+            let started = MatchWait::Started {
+                match_id: *match_id,
+                best_of: *best_of,
+            };
+            ob.pop_front();
+            Ok(started)
+        }
+        Some(ServerMsg::Error { message }) => {
+            let message = message.clone();
+            ob.pop_front();
+            Err(err(StatusCode::TOO_MANY_REQUESTS, &message))
+        }
+        _ => Ok(MatchWait::Waiting),
+    }
 }
 
 /// Push a `ClientMsg` into a session's engine channel (shared by commit/reveal/chat).
@@ -506,10 +576,7 @@ mod tests {
         {
             let mut ob = outbox.lock().await;
             for position in 0..5 {
-                ob.push_back(ServerMsg::Queued {
-                    best_of: 3,
-                    position,
-                });
+                ob.push_back(ServerMsg::Queued { position });
             }
         }
         // First drain takes only `limit` from the front, in order.
@@ -525,6 +592,63 @@ mod tests {
 
         // Draining an empty outbox yields nothing.
         assert!(drain(&outbox, 50).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn take_match_start_skips_queued_pops_match_start_and_leaves_the_rest() {
+        let match_id = Uuid::new_v4();
+        let outbox = Arc::new(Mutex::new(VecDeque::new()));
+        {
+            let mut ob = outbox.lock().await;
+            ob.push_back(ServerMsg::Queued { position: 0 });
+            ob.push_back(ServerMsg::Queued { position: 1 });
+            ob.push_back(ServerMsg::MatchStart {
+                match_id,
+                best_of: 5,
+                rules: "rules".into(),
+            });
+            ob.push_back(ServerMsg::Heartbeat); // a later message the poll loop must still see
+        }
+
+        match take_match_start(&outbox).await.unwrap() {
+            MatchWait::Started {
+                match_id: id,
+                best_of,
+            } => {
+                assert_eq!(id, match_id);
+                assert_eq!(best_of, 5);
+            }
+            MatchWait::Waiting => panic!("expected Started"),
+        }
+
+        // The MatchStart and the queue chatter are consumed; later messages stay.
+        let rest = drain(&outbox, 50).await;
+        assert_eq!(rest.len(), 1);
+        assert!(matches!(rest[0], ServerMsg::Heartbeat));
+    }
+
+    #[tokio::test]
+    async fn take_match_start_waits_when_only_queued_chatter() {
+        let outbox = Arc::new(Mutex::new(VecDeque::new()));
+        outbox
+            .lock()
+            .await
+            .push_back(ServerMsg::Queued { position: 3 });
+        assert!(matches!(
+            take_match_start(&outbox).await.unwrap(),
+            MatchWait::Waiting
+        ));
+        // Queue chatter is dropped so it can't be mistaken for a match later.
+        assert!(drain(&outbox, 50).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn take_match_start_surfaces_enqueue_error() {
+        let outbox = Arc::new(Mutex::new(VecDeque::new()));
+        outbox.lock().await.push_back(ServerMsg::Error {
+            message: "too many concurrent matches from your network".into(),
+        });
+        assert!(take_match_start(&outbox).await.is_err());
     }
 
     #[test]

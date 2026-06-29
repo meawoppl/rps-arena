@@ -99,26 +99,28 @@ impl QueueHeartbeat {
     }
 }
 
-/// Clamp a requested best-of to a sane, odd value in `1..=101`.
-#[allow(clippy::manual_is_multiple_of)] // `is_multiple_of` is too new for some toolchains
-pub fn sanitize_best_of(requested: u32) -> u32 {
-    let n = requested.clamp(1, 101);
-    if n % 2 == 0 {
-        n + 1
-    } else {
-        n
-    }
+/// Best-of lengths the server may assign to a match. All odd by construction.
+pub const BEST_OF_CHOICES: [u32; 3] = [3, 5, 7];
+
+/// Pick a best-of length for a freshly paired match. The server chooses (the
+/// client no longer requests one), so the queue isn't fragmented by best-of and
+/// players pair with whoever is waiting. Server-side randomness — unrelated to
+/// the agent rule against using RNG to pick a *throw*.
+pub fn random_best_of() -> u32 {
+    let idx = (Uuid::new_v4().as_bytes()[0] as usize) % BEST_OF_CHOICES.len();
+    BEST_OF_CHOICES[idx]
 }
 
 /// A waiting player plus its (optional) client IP.
 type Waiting = (Option<IpAddr>, PlayerConn);
 
-/// Matchmaking queue, keyed by requested best-of. Each waiting player carries
-/// its (optional) client IP so the matchmaker can avoid self-play and cap
+/// Single matchmaking pool. The server picks the best-of length at pair time,
+/// so there's no per-best-of fragmentation. Each waiting player carries its
+/// (optional) client IP so the matchmaker can avoid self-play and cap
 /// concurrency per IP.
 #[derive(Clone)]
 pub struct Matchmaker {
-    queue: Arc<Mutex<HashMap<u32, VecDeque<Waiting>>>>,
+    queue: Arc<Mutex<VecDeque<Waiting>>>,
     /// In-progress match count per client IP.
     active_by_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pool: DbPool,
@@ -127,16 +129,17 @@ pub struct Matchmaker {
 impl Matchmaker {
     pub fn new(pool: DbPool) -> Self {
         Self {
-            queue: Arc::new(Mutex::new(HashMap::new())),
+            queue: Arc::new(Mutex::new(VecDeque::new())),
             active_by_ip: Arc::new(Mutex::new(HashMap::new())),
             pool,
         }
     }
 
     /// Enqueue a player. Pairs with a waiting opponent from a *different* IP
-    /// (no self-play, #32) and spawns the match; otherwise holds the player.
-    /// Refuses if this IP already has [`MAX_MATCHES_PER_IP`] matches running.
-    pub async fn enqueue(&self, best_of: u32, ip: Option<IpAddr>, player: PlayerConn) {
+    /// (no self-play, #32), picks a server-chosen best-of, and spawns the match;
+    /// otherwise holds the player. Refuses if this IP already has
+    /// [`MAX_MATCHES_PER_IP`] matches running.
+    pub async fn enqueue(&self, ip: Option<IpAddr>, player: PlayerConn) {
         // Per-IP concurrent-match cap.
         if let Some(addr) = ip {
             let active = self.active_by_ip.lock().await;
@@ -149,9 +152,8 @@ impl Matchmaker {
             }
         }
 
-        let mut q = self.queue.lock().await;
-        let dq = q.entry(best_of).or_default();
-        prune_stale_waiters(dq);
+        let mut dq = self.queue.lock().await;
+        prune_stale_waiters(&mut dq);
         // Anti self-play: only pair with an opponent on a different IP (when
         // both IPs are known). Unknown IP on either side falls back to pairing.
         let opp_idx = dq.iter().position(|(opp_ip, _)| match (opp_ip, ip) {
@@ -160,7 +162,8 @@ impl Matchmaker {
         });
         if let Some(i) = opp_idx {
             let (opp_ip, opponent) = dq.remove(i).expect("index came from position()");
-            drop(q);
+            drop(dq);
+            let best_of = random_best_of();
             // Reserve a concurrency slot for each known IP; released when the
             // match task finishes.
             {
@@ -185,10 +188,7 @@ impl Matchmaker {
             });
         } else {
             let pos = dq.len() as u32 + 1;
-            player.send(ServerMsg::Queued {
-                best_of,
-                position: pos,
-            });
+            player.send(ServerMsg::Queued { position: pos });
             dq.push_back((ip, player));
         }
     }
@@ -301,8 +301,10 @@ async fn handle_msg(
             {
                 tracing::warn!("chat persist failed: {e}");
             }
+            // Identity stays hidden until MatchEnd; the transcript above keeps
+            // the true model. Relay under a neutral label.
             opp.send(ServerMsg::ChatFrom {
-                from_model: me.model.clone(),
+                from_model: "opponent".into(),
                 text,
             });
             Flow::Continue
@@ -365,8 +367,10 @@ async fn handle_msg(
             {
                 tracing::warn!("commit chat persist failed: {e}");
             }
+            // Identity stays hidden until MatchEnd; the transcript above keeps
+            // the true model. Relay under a neutral label.
             opp.send(ServerMsg::ChatFrom {
-                from_model: me.model.clone(),
+                from_model: "opponent".into(),
                 text: chat_text,
             });
             *slot = Some(PhaseValue::Commit(CommitValue {
@@ -493,15 +497,15 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
         return;
     }
 
+    // Opponent identity is withheld until MatchEnd (anti-scouting), so MatchStart
+    // carries only the match id, server-chosen best-of, and rules.
     a.send(ServerMsg::MatchStart {
         match_id,
-        opponent_model: b.model.clone(),
         best_of,
         rules: rules.clone(),
     });
     b.send(ServerMsg::MatchStart {
         match_id,
-        opponent_model: a.model.clone(),
         best_of,
         rules: rules.clone(),
     });
@@ -749,14 +753,17 @@ pub async fn run_match(pool: DbPool, best_of: u32, mut a: PlayerConn, mut b: Pla
         tracing::warn!("finalize_match failed: {e}");
     }
 
+    // The match is over — now reveal who each side was playing.
     a.send(ServerMsg::MatchEnd {
         winner_model: winner_model.clone(),
+        opponent_model: b.model.clone(),
         score_you: score_a,
         score_them: score_b,
         reason: end_reason,
     });
     b.send(ServerMsg::MatchEnd {
         winner_model,
+        opponent_model: a.model.clone(),
         score_you: score_b,
         score_them: score_a,
         reason: end_reason,
@@ -782,11 +789,12 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_forces_odd_and_clamps() {
-        assert_eq!(sanitize_best_of(0), 1);
-        assert_eq!(sanitize_best_of(2), 3);
-        assert_eq!(sanitize_best_of(3), 3);
-        assert_eq!(sanitize_best_of(1000), 101);
+    fn random_best_of_is_always_an_odd_choice() {
+        for _ in 0..256 {
+            let n = random_best_of();
+            assert!(BEST_OF_CHOICES.contains(&n), "{n} not in BEST_OF_CHOICES");
+            assert_eq!(n % 2, 1, "best-of {n} must be odd");
+        }
     }
 
     #[test]

@@ -4,11 +4,11 @@ use gloo_net::http::Request;
 use gloo_timers::callback::Interval;
 use shared::{
     commit_hash, make_secret, ChatRecord, EndReason, LeaderboardRow, MatchDetail, MatchSummary,
-    Outcome, PlayChatRequest, PlayCommitRequest, PlayQueueRequest, PlayRegisterRequest,
-    PlayRegisterResponse, PlayRevealRequest, RoundRecord, ServerMsg, Throw,
+    Outcome, PlayChatRequest, PlayCommitRequest, PlayRegisterRequest, PlayRegisterResponse,
+    PlayRequestMatchResponse, PlayRevealRequest, RoundRecord, ServerMsg, Throw,
 };
 use wasm_bindgen_futures::spawn_local;
-use web_sys::{HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement};
+use web_sys::{HtmlInputElement, HtmlTextAreaElement};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
@@ -235,15 +235,6 @@ fn human_play() -> Html {
             update_game(&game, &current_game, |g| g.name = value);
         })
     };
-    let on_best_of = {
-        let game = game.clone();
-        let current_game = current_game.clone();
-        Callback::from(move |event: Event| {
-            let select: HtmlSelectElement = event.target_unchecked_into();
-            let value = select.value().parse::<u32>().unwrap_or(3);
-            update_game(&game, &current_game, |g| g.best_of = value);
-        })
-    };
     let start = {
         let game = game.clone();
         let current_game = current_game.clone();
@@ -266,10 +257,14 @@ fn human_play() -> Html {
                     g.chat.clear();
                     g.events.push("Registered as a human player.".to_string());
                 });
-                match register_and_queue(&name, current.best_of).await {
-                    Ok(token) => update_game(&game, &current_game, |g| {
+                match register_and_request_match(&name).await {
+                    Ok((token, match_id, best_of)) => update_game(&game, &current_game, |g| {
+                        g.match_id = match_id;
+                        g.best_of = best_of;
+                        // Set the token last: it starts the poll loop, which is
+                        // now the sole consumer of the message outbox.
                         g.token = Some(token);
-                        g.events.push("Joined matchmaking queue.".to_string());
+                        g.events.push(format!("Matched for best-of-{best_of}."));
                     }),
                     Err(err) => update_game(&game, &current_game, |g| {
                         g.phase = HumanPhase::Setup;
@@ -347,7 +342,7 @@ fn human_play() -> Html {
 
             <section class="play-layout">
                 <div class="play-panel">
-                    { render_human_setup(&game, on_name, on_best_of, start) }
+                    { render_human_setup(&game, on_name, start) }
                     { render_arena(&game) }
                     { render_result(&game, leave) }
                     { render_throw_controls(&game, &current_game, on_strategy_input) }
@@ -711,7 +706,6 @@ fn render_convo(lines: &[&ChatRecord], summary: &MatchSummary) -> Html {
 fn render_human_setup(
     game: &UseStateHandle<HumanGame>,
     on_name: Callback<InputEvent>,
-    on_best_of: Callback<Event>,
     start: Callback<MouseEvent>,
 ) -> Html {
     let disabled = game.phase != HumanPhase::Setup;
@@ -721,15 +715,7 @@ fn render_human_setup(
                 <span>{ "Name" }</span>
                 <input type="text" value={game.name.clone()} oninput={on_name} disabled={disabled} maxlength="40" />
             </label>
-            <label>
-                <span>{ "Match" }</span>
-                <select onchange={on_best_of} disabled={disabled} value={game.best_of.to_string()}>
-                    <option value="1">{ "Best of 1" }</option>
-                    <option value="3">{ "Best of 3" }</option>
-                    <option value="5">{ "Best of 5" }</option>
-                    <option value="7">{ "Best of 7" }</option>
-                </select>
-            </label>
+            <p class="muted">{ "The server pairs you with the next waiting player and picks the match length." }</p>
             <button type="button" class="primary-button" onclick={start} disabled={disabled}>
                 { "Join Queue" }
             </button>
@@ -989,7 +975,12 @@ fn render_event_log(game: &UseStateHandle<HumanGame>) -> Html {
     }
 }
 
-async fn register_and_queue(name: &str, best_of: u32) -> Result<String, String> {
+/// Register, then long-poll `request-match` until the server pairs us. Returns
+/// the token, match id, and server-chosen best-of. The opponent is not revealed
+/// here (it arrives in `MatchEnd`).
+async fn register_and_request_match(
+    name: &str,
+) -> Result<(String, Option<uuid::Uuid>, u32), String> {
     let registered: PlayRegisterResponse = post_json(
         "/api/play/register",
         &PlayRegisterRequest {
@@ -999,9 +990,14 @@ async fn register_and_queue(name: &str, best_of: u32) -> Result<String, String> 
     )
     .await?;
     let token = registered.token.to_string();
-    post_auth_json::<_, shared::PlayOk>("/api/play/queue", &token, &PlayQueueRequest { best_of })
-        .await?;
-    Ok(token)
+    loop {
+        let resp: PlayRequestMatchResponse =
+            post_auth_json("/api/play/request-match", &token, &()).await?;
+        if resp.matched {
+            return Ok((token, resp.match_id, resp.best_of.unwrap_or(0)));
+        }
+        // Timed out waiting; the player stays queued, so just re-request.
+    }
 }
 
 async fn poll_play(token: &str) -> Result<Vec<ServerMsg>, String> {
@@ -1028,21 +1024,17 @@ fn apply_server_messages(
     let mut next = current_game.borrow().clone();
     for message in messages {
         match message {
-            ServerMsg::Queued { best_of, position } => {
+            ServerMsg::Queued { position } => {
                 next.phase = HumanPhase::Queueing;
-                next.events.push(format!(
-                    "Queued for best-of-{best_of}; position {position}."
-                ));
+                next.events
+                    .push(format!("Queued for matchmaking; position {position}."));
             }
             ServerMsg::MatchStart {
-                match_id,
-                opponent_model,
-                best_of,
-                ..
+                match_id, best_of, ..
             } => {
                 next.match_id = Some(match_id);
-                // Stored, but kept hidden in the UI until the match completes.
-                next.opponent = Some(opponent_model);
+                next.best_of = best_of;
+                // Opponent identity stays hidden until MatchEnd.
                 next.events.push(format!(
                     "Matched for best-of-{best_of}. Opponent revealed when the match ends."
                 ));
@@ -1121,6 +1113,7 @@ fn apply_server_messages(
             }
             ServerMsg::MatchEnd {
                 winner_model,
+                opponent_model,
                 score_you,
                 score_them,
                 reason,
@@ -1130,6 +1123,8 @@ fn apply_server_messages(
                 next.score_you = score_you;
                 next.score_them = score_them;
                 next.winner = winner_model.clone();
+                // The match is over — reveal who the opponent was.
+                next.opponent = Some(opponent_model);
                 next.end_reason = Some(reason);
                 let winner = winner_model.unwrap_or_else(|| "no winner".to_string());
                 next.events.push(format!(

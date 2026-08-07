@@ -97,6 +97,10 @@ fn can_pair_ips(
     }
 }
 
+fn distinct_known_ips(a: Option<IpAddr>, b: Option<IpAddr>) -> HashSet<IpAddr> {
+    [a, b].into_iter().flatten().collect()
+}
+
 /// A connected player from the engine's point of view.
 pub struct PlayerConn {
     pub agent_id: Uuid,
@@ -219,7 +223,7 @@ impl Matchmaker {
             // match task finishes.
             {
                 let mut active = self.active_by_ip.lock().await;
-                for addr in [opp_ip, ip].into_iter().flatten() {
+                for addr in distinct_known_ips(opp_ip, ip) {
                     *active.entry(addr).or_insert(0) += 1;
                 }
             }
@@ -228,7 +232,7 @@ impl Matchmaker {
             tokio::spawn(async move {
                 run_match(pool, best_of, opponent, player).await;
                 let mut active = active_by_ip.lock().await;
-                for addr in [opp_ip, ip].into_iter().flatten() {
+                for addr in distinct_known_ips(opp_ip, ip) {
                     if let Some(c) = active.get_mut(&addr) {
                         *c = c.saturating_sub(1);
                         if *c == 0 {
@@ -939,5 +943,17 @@ mod tests {
             "claude-fable-5",
             &allowlist
         ));
+    }
+
+    #[test]
+    fn same_ip_match_consumes_one_concurrency_slot() {
+        let ip: IpAddr = "203.0.113.10".parse().unwrap();
+        let other: IpAddr = "203.0.113.11".parse().unwrap();
+
+        assert_eq!(distinct_known_ips(Some(ip), Some(ip)), HashSet::from([ip]));
+        assert_eq!(
+            distinct_known_ips(Some(ip), Some(other)),
+            HashSet::from([ip, other])
+        );
     }
 }

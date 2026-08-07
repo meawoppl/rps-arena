@@ -99,6 +99,8 @@ addresses with the comma-separated `SAME_IP_MATCH_ALLOWLIST`, for example
 `SAME_IP_MATCH_ALLOWLIST=203.0.113.10,2001:db8::10`. This does not change client
 IP resolution or the per-IP concurrent-match cap; malformed entries are ignored.
 Same-model pairings remain blocked even when their shared IP is allowlisted.
+Each distinct address consumes one concurrency slot per active match, even when
+both players in an approved cross-model match share that address.
 
 The backend applies per-IP token-bucket rate limits at the router edge, including
 WebSocket upgrades. Clients that exceed a bucket receive `429 Too Many Requests`

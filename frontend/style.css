@@ -416,7 +416,7 @@ tbody tr:last-child td {
 
 .human-setup input,
 .human-setup select,
-.chat-compose input {
+.throw-comment-field input {
     width: 100%;
     min-height: 38px;
     border: 1px solid #303846;
@@ -531,6 +531,23 @@ tbody tr:last-child td {
     font-size: 13px;
 }
 
+.throw-comment-field {
+    display: grid;
+    gap: 6px;
+    color: #9aa6b2;
+    font-size: 13px;
+}
+
+.throw-comment-field input {
+    width: 100%;
+    min-height: 46px;
+    border: 1px solid #303846;
+    border-radius: 7px;
+    background: #10141d;
+    color: #e6edf3;
+    padding: 0 12px;
+}
+
 .strategy-summary-field textarea {
     width: 100%;
     min-height: 82px;
@@ -625,23 +642,6 @@ tbody tr:last-child td {
 
 .compact {
     padding: 10px;
-}
-
-.chat-compose {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px;
-    margin-top: 10px;
-}
-
-.chat-compose button {
-    min-height: 38px;
-    padding: 0 12px;
-    border: 1px solid #303846;
-    border-radius: 7px;
-    background: #202735;
-    color: #e6edf3;
-    cursor: pointer;
 }
 
 .event-log {

@@ -4,7 +4,7 @@ use gloo_net::http::Request;
 use gloo_timers::callback::Interval;
 use shared::{
     commit_hash, make_secret, ChatRecord, EndReason, LeaderboardRow, MatchDetail, MatchSummary,
-    Outcome, PlayChatRequest, PlayCommitRequest, PlayRegisterRequest, PlayRegisterResponse,
+    Outcome, PlayCommitRequest, PlayRegisterRequest, PlayRegisterResponse,
     PlayRequestMatchResponse, PlayRevealRequest, RoundRecord, ServerMsg, Throw, HUMAN_DISPLAY_NAME,
 };
 use wasm_bindgen_futures::spawn_local;
@@ -305,38 +305,6 @@ fn human_play() -> Html {
             update_game(&game, &current_game, |g| g.strategy_summary = value);
         })
     };
-    let send_chat = {
-        let game = game.clone();
-        let current_game = current_game.clone();
-        Callback::from(move |_| {
-            let game = game.clone();
-            let current_game = current_game.clone();
-            spawn_local(async move {
-                let current = current_game.borrow().clone();
-                let Some(token) = current.token else {
-                    return;
-                };
-                let text = current.chat_text.trim().to_string();
-                if text.is_empty() {
-                    return;
-                }
-                match post_auth_json::<_, shared::PlayOk>(
-                    "/api/play/chat",
-                    &token,
-                    &PlayChatRequest { text: text.clone() },
-                )
-                .await
-                {
-                    Ok(_) => update_game(&game, &current_game, |g| {
-                        g.chat_text.clear();
-                        g.chat.push(("you".to_string(), text));
-                    }),
-                    Err(err) => update_game(&game, &current_game, |g| g.error = Some(err)),
-                }
-            });
-        })
-    };
-
     html! {
         <main class="shell play-shell">
             <header class="topbar">
@@ -353,10 +321,10 @@ fn human_play() -> Html {
                     { render_human_setup(&game, start) }
                     { render_arena(&game) }
                     { render_result(&game, leave) }
-                    { render_throw_controls(&game, &current_game, on_strategy_input) }
+                    { render_throw_controls(&game, &current_game, on_strategy_input, on_chat_input) }
                 </div>
                 <aside class="play-side">
-                    { render_chat_panel(&game, on_chat_input, send_chat) }
+                    { render_chat_panel(&game) }
                     { render_event_log(&game) }
                 </aside>
             </section>
@@ -801,6 +769,7 @@ fn render_throw_controls(
     game: &UseStateHandle<HumanGame>,
     current_game: &Rc<RefCell<HumanGame>>,
     on_strategy_input: Callback<InputEvent>,
+    on_chat_input: Callback<InputEvent>,
 ) -> Html {
     let live_round = game.phase == HumanPhase::WaitingForThrow && game.attempt_id.is_some();
     let has_comment = !game.chat_text.trim().is_empty();
@@ -809,13 +778,24 @@ fn render_throw_controls(
     html! {
         <section class="throw-pad" aria-label="Choose throw">
             <label class="strategy-summary-field">
-                <span>{ "Strategy summary" }</span>
+                <span>{ "Strategy summary (kept between throws)" }</span>
                 <textarea
                     placeholder="Hidden from your opponent until the match transcript. Keep it short: what are you trying this throw?"
                     value={game.strategy_summary.clone()}
                     oninput={on_strategy_input}
                     disabled={!live_round}
                     maxlength="1000"
+                />
+            </label>
+            <label class="throw-comment-field">
+                <span>{ "New public message for this throw" }</span>
+                <input
+                    type="text"
+                    placeholder="Required each throw; cleared after you commit"
+                    value={game.chat_text.clone()}
+                    oninput={on_chat_input}
+                    disabled={!live_round}
+                    maxlength="300"
                 />
             </label>
             <div class="throw-buttons">
@@ -894,7 +874,6 @@ fn throw_button(
                     g.error = None;
                     g.chat.push(("you".to_string(), comment.clone()));
                     g.chat_text.clear();
-                    g.strategy_summary.clear();
                     g.events
                         .push(format!("Commented and committed {}.", throw_label(throw)));
                 }),
@@ -911,12 +890,7 @@ fn throw_button(
     }
 }
 
-fn render_chat_panel(
-    game: &UseStateHandle<HumanGame>,
-    on_chat_input: Callback<InputEvent>,
-    send_chat: Callback<MouseEvent>,
-) -> Html {
-    let disabled = game.token.is_none() || game.phase == HumanPhase::Complete;
+fn render_chat_panel(game: &UseStateHandle<HumanGame>) -> Html {
     html! {
         <section class="side-section">
             <div class="section-heading">
@@ -946,17 +920,6 @@ fn render_chat_panel(
                         }) }
                     }
                 }
-            </div>
-            <div class="chat-compose">
-                <input
-                    type="text"
-                    placeholder="Send a message"
-                    value={game.chat_text.clone()}
-                    oninput={on_chat_input}
-                    disabled={disabled}
-                    maxlength="300"
-                />
-                <button type="button" onclick={send_chat} disabled={disabled}>{ "Send" }</button>
             </div>
         </section>
     }

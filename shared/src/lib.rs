@@ -18,6 +18,8 @@ use ws_bridge::WsEndpoint;
 /// obviously unrelated leaderboard names are rejected.
 pub struct AllowedModelNames;
 
+pub const HUMAN_DISPLAY_NAME: &str = "Human";
+
 impl AllowedModelNames {
     pub const MAX_LEN: usize = 96;
     pub const HUMAN_DISPLAY_MAX_LEN: usize = 40;
@@ -91,28 +93,11 @@ impl AllowedModelNames {
         )
     }
 
-    pub fn display_name_for(model: &str, requested: &str) -> Result<String, DisplayNameError> {
+    pub fn display_name_for(model: &str, _requested: &str) -> Result<String, DisplayNameError> {
         if model != "human" {
             return Ok(model.to_string());
         }
-
-        let display_name = requested.trim();
-        if display_name.is_empty() {
-            return Err(DisplayNameError::Empty);
-        }
-        if display_name.len() > Self::HUMAN_DISPLAY_MAX_LEN {
-            return Err(DisplayNameError::TooLong);
-        }
-        if !display_name
-            .chars()
-            .all(|c| c.is_ascii() && !c.is_ascii_control())
-        {
-            return Err(DisplayNameError::InvalidCharacters);
-        }
-        if Self::normalize(display_name).is_ok() {
-            return Err(DisplayNameError::Reserved);
-        }
-        Ok(display_name.to_string())
+        Ok(HUMAN_DISPLAY_NAME.to_string())
     }
 }
 
@@ -684,31 +669,13 @@ mod tests {
     }
 
     #[test]
-    fn human_display_names_are_limited_but_user_visible() {
-        assert_eq!(
-            AllowedModelNames::display_name_for("human", "  Alice  ").as_deref(),
-            Ok("Alice")
-        );
-        assert_eq!(
-            AllowedModelNames::display_name_for("human", ""),
-            Err(DisplayNameError::Empty)
-        );
-        assert_eq!(
-            AllowedModelNames::display_name_for("human", "x".repeat(41).as_str()),
-            Err(DisplayNameError::TooLong)
-        );
-        assert_eq!(
-            AllowedModelNames::display_name_for("human", "Alice\nBob"),
-            Err(DisplayNameError::InvalidCharacters)
-        );
-        assert_eq!(
-            AllowedModelNames::display_name_for("human", "codex"),
-            Err(DisplayNameError::Reserved)
-        );
-        assert_eq!(
-            AllowedModelNames::display_name_for("human", "Claude-Opus-4-8"),
-            Err(DisplayNameError::Reserved)
-        );
+    fn human_display_name_is_fixed() {
+        for requested in ["Human", "Alice", "", "codex", "Alice\nBob"] {
+            assert_eq!(
+                AllowedModelNames::display_name_for("human", requested).as_deref(),
+                Ok(HUMAN_DISPLAY_NAME)
+            );
+        }
     }
 
     #[test]

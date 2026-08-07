@@ -5,7 +5,7 @@ use gloo_timers::callback::Interval;
 use shared::{
     commit_hash, make_secret, ChatRecord, EndReason, LeaderboardRow, MatchDetail, MatchSummary,
     Outcome, PlayChatRequest, PlayCommitRequest, PlayRegisterRequest, PlayRegisterResponse,
-    PlayRequestMatchResponse, PlayRevealRequest, RoundRecord, ServerMsg, Throw,
+    PlayRequestMatchResponse, PlayRevealRequest, RoundRecord, ServerMsg, Throw, HUMAN_DISPLAY_NAME,
 };
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlTextAreaElement};
@@ -139,7 +139,6 @@ fn dashboard() -> Html {
 
 #[derive(Clone, PartialEq)]
 struct HumanGame {
-    name: String,
     best_of: u32,
     token: Option<String>,
     phase: HumanPhase,
@@ -173,7 +172,6 @@ enum HumanPhase {
 impl Default for HumanGame {
     fn default() -> Self {
         Self {
-            name: "Human".to_string(),
             best_of: 3,
             token: None,
             phase: HumanPhase::Setup,
@@ -226,15 +224,6 @@ fn human_play() -> Html {
         });
     }
 
-    let on_name = {
-        let game = game.clone();
-        let current_game = current_game.clone();
-        Callback::from(move |event: InputEvent| {
-            let input: HtmlInputElement = event.target_unchecked_into();
-            let value = input.value();
-            update_game(&game, &current_game, |g| g.name = value);
-        })
-    };
     let start = {
         let game = game.clone();
         let current_game = current_game.clone();
@@ -242,14 +231,6 @@ fn human_play() -> Html {
             let game = game.clone();
             let current_game = current_game.clone();
             spawn_local(async move {
-                let current = current_game.borrow().clone();
-                let name = current.name.trim().to_string();
-                if name.is_empty() {
-                    update_game(&game, &current_game, |g| {
-                        g.error = Some("name required".to_string());
-                    });
-                    return;
-                }
                 update_game(&game, &current_game, |g| {
                     g.phase = HumanPhase::Queueing;
                     g.error = None;
@@ -257,7 +238,7 @@ fn human_play() -> Html {
                     g.chat.clear();
                     g.events.push("Registered as a human player.".to_string());
                 });
-                match register_and_request_match(&name).await {
+                match register_and_request_match().await {
                     Ok((token, match_id, best_of)) => update_game(&game, &current_game, |g| {
                         g.match_id = match_id;
                         g.best_of = best_of;
@@ -342,7 +323,7 @@ fn human_play() -> Html {
 
             <section class="play-layout">
                 <div class="play-panel">
-                    { render_human_setup(&game, on_name, start) }
+                    { render_human_setup(&game, start) }
                     { render_arena(&game) }
                     { render_result(&game, leave) }
                     { render_throw_controls(&game, &current_game, on_strategy_input) }
@@ -703,19 +684,11 @@ fn render_convo(lines: &[&ChatRecord], summary: &MatchSummary) -> Html {
     }
 }
 
-fn render_human_setup(
-    game: &UseStateHandle<HumanGame>,
-    on_name: Callback<InputEvent>,
-    start: Callback<MouseEvent>,
-) -> Html {
+fn render_human_setup(game: &UseStateHandle<HumanGame>, start: Callback<MouseEvent>) -> Html {
     let disabled = game.phase != HumanPhase::Setup;
     html! {
         <section class="human-setup" aria-label="Human player setup">
-            <label>
-                <span>{ "Name" }</span>
-                <input type="text" value={game.name.clone()} oninput={on_name} disabled={disabled} maxlength="40" />
-            </label>
-            <p class="muted">{ "The server pairs you with the next waiting player and picks the match length." }</p>
+            <p class="muted">{ "Play as Human. The server pairs you with the next waiting player and picks the match length." }</p>
             <button type="button" class="primary-button" onclick={start} disabled={disabled}>
                 { "Join Queue" }
             </button>
@@ -978,14 +951,12 @@ fn render_event_log(game: &UseStateHandle<HumanGame>) -> Html {
 /// Register, then long-poll `request-match` until the server pairs us. Returns
 /// the token, match id, and server-chosen best-of. The opponent is not revealed
 /// here (it arrives in `MatchEnd`).
-async fn register_and_request_match(
-    name: &str,
-) -> Result<(String, Option<uuid::Uuid>, u32), String> {
+async fn register_and_request_match() -> Result<(String, Option<uuid::Uuid>, u32), String> {
     let registered: PlayRegisterResponse = post_json(
         "/api/play/register",
         &PlayRegisterRequest {
             model: "human".to_string(),
-            display_name: name.to_string(),
+            display_name: HUMAN_DISPLAY_NAME.to_string(),
         },
     )
     .await?;

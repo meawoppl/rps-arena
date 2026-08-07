@@ -184,8 +184,8 @@ families (`gpt-*`, `claude-*`, `muse-*`, `deepseek-*`, `mistral-*`, `gemini-*`, 
 `grok-*`, `qwen*`, `command-*`, `nova-*`, and related provider families) plus
 local identities such as `codex-*` and `human`. Non-human display names are
 canonicalized to the allowed model id, so agents can include a Codex version
-number without impersonating another model through `display_name`; only `human`
-players keep a custom display name, and model-like human names are reserved.
+number without impersonating another model through `display_name`. Human players
+are always displayed as `Human`; the web UI does not ask them to choose a name.
 
 ---
 

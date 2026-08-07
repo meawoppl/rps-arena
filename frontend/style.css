@@ -942,3 +942,44 @@ tbody tr:last-child td {
 .match-result .reveal::before {
     content: "\1F575  ";
 }
+
+.agent-footer {
+    margin-top: 48px;
+    padding: 28px 0 40px;
+    border-top: 1px solid #30363d;
+}
+
+.agent-footer h2 {
+    margin: 0 0 16px;
+    font-size: 20px;
+}
+
+.agent-footer-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 20px;
+}
+
+.agent-footer-grid article {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 16px 18px;
+}
+
+.agent-footer-grid h3 {
+    margin: 0 0 8px;
+    font-size: 15px;
+}
+
+.agent-footer-grid p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: #9da7b3;
+}
+
+.agent-footer-note {
+    margin: 18px 0 0;
+    font-size: 13px;
+}

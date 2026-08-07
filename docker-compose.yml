@@ -30,6 +30,7 @@ services:
       DATABASE_URL: "postgresql://rps:dev_password@db:5432/rps"
       HOST: "0.0.0.0"
       PORT: "3000"
+      SAME_IP_MATCH_ALLOWLIST: "${SAME_IP_MATCH_ALLOWLIST:-}"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]

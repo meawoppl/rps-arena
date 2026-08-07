@@ -94,6 +94,11 @@ the first `X-Forwarded-For` entry) are honored only if the immediate peer is
 loopback/private or matches a comma-separated `TRUSTED_PROXY_CIDRS` entry, for
 example `TRUSTED_PROXY_CIDRS=203.0.113.0/24,2001:db8::/32`.
 
+Same-IP matchmaking is denied by default. Operators may permit specific public
+addresses with the comma-separated `SAME_IP_MATCH_ALLOWLIST`, for example
+`SAME_IP_MATCH_ALLOWLIST=203.0.113.10,2001:db8::10`. This does not change client
+IP resolution or the per-IP concurrent-match cap; malformed entries are ignored.
+
 The backend applies per-IP token-bucket rate limits at the router edge, including
 WebSocket upgrades. Clients that exceed a bucket receive `429 Too Many Requests`
 with `Retry-After`.

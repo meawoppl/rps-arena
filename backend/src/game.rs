@@ -5,7 +5,7 @@
 //! [`Matchmaker::enqueue`] pairs two waiting players and spawns [`run_match`],
 //! which owns both players for the life of the match.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,6 +48,44 @@ const MIN_TURN_INTERVAL: Duration = Duration::from_secs(1);
 /// Max simultaneous in-progress matches per client IP (#32) — caps the
 /// throughput one actor can use to grind the leaderboard.
 const MAX_MATCHES_PER_IP: usize = 2;
+const SAME_IP_MATCH_ALLOWLIST_ENV: &str = "SAME_IP_MATCH_ALLOWLIST";
+
+fn same_ip_match_allowlist_from_env() -> HashSet<IpAddr> {
+    let Ok(raw) = std::env::var(SAME_IP_MATCH_ALLOWLIST_ENV) else {
+        return HashSet::new();
+    };
+
+    raw.split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                return None;
+            }
+            match entry.parse::<IpAddr>() {
+                Ok(ip) => Some(ip),
+                Err(_) => {
+                    tracing::warn!(
+                        value = entry,
+                        env = SAME_IP_MATCH_ALLOWLIST_ENV,
+                        "ignoring invalid same-IP matchmaking allowlist entry"
+                    );
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+fn can_pair_ips(
+    waiting_ip: Option<IpAddr>,
+    joining_ip: Option<IpAddr>,
+    same_ip_allowlist: &HashSet<IpAddr>,
+) -> bool {
+    match (waiting_ip, joining_ip) {
+        (Some(a), Some(b)) => a != b || same_ip_allowlist.contains(&a),
+        _ => true,
+    }
+}
 
 /// A connected player from the engine's point of view.
 pub struct PlayerConn {
@@ -91,6 +129,8 @@ pub struct Matchmaker {
     queue: Arc<Mutex<HashMap<u32, VecDeque<Waiting>>>>,
     /// In-progress match count per client IP.
     active_by_ip: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    /// Operator-approved addresses that may pair with themselves. Empty by default.
+    same_ip_allowlist: Arc<HashSet<IpAddr>>,
     pool: DbPool,
 }
 
@@ -99,12 +139,13 @@ impl Matchmaker {
         Self {
             queue: Arc::new(Mutex::new(HashMap::new())),
             active_by_ip: Arc::new(Mutex::new(HashMap::new())),
+            same_ip_allowlist: Arc::new(same_ip_match_allowlist_from_env()),
             pool,
         }
     }
 
-    /// Enqueue a player. Pairs with a waiting opponent from a *different* IP
-    /// (no self-play, #32) and spawns the match; otherwise holds the player.
+    /// Enqueue a player. Pairs with a waiting opponent from a different IP, or
+    /// from the same IP when that address is explicitly operator-allowlisted.
     /// Refuses if this IP already has [`MAX_MATCHES_PER_IP`] matches running.
     pub async fn enqueue(&self, best_of: u32, ip: Option<IpAddr>, player: PlayerConn) {
         // Per-IP concurrent-match cap.
@@ -121,12 +162,12 @@ impl Matchmaker {
 
         let mut q = self.queue.lock().await;
         let dq = q.entry(best_of).or_default();
-        // Anti self-play: only pair with an opponent on a different IP (when
-        // both IPs are known). Unknown IP on either side falls back to pairing.
-        let opp_idx = dq.iter().position(|(opp_ip, _)| match (opp_ip, ip) {
-            (Some(a), Some(b)) => *a != b,
-            _ => true,
-        });
+        // Anti self-play remains fail-closed for known, equal IPs unless an
+        // operator explicitly permits that address. Unknown IPs retain the
+        // existing fallback behavior.
+        let opp_idx = dq
+            .iter()
+            .position(|(opp_ip, _)| can_pair_ips(*opp_ip, ip, &self.same_ip_allowlist));
         if let Some(i) = opp_idx {
             let (opp_ip, opponent) = dq.remove(i).expect("index came from position()");
             drop(q);
@@ -752,5 +793,20 @@ mod tests {
             HUMAN_TURN_DEADLINE
         );
         assert_eq!(turn_deadline_for("human", "human"), HUMAN_TURN_DEADLINE);
+    }
+
+    #[test]
+    fn same_ip_pairing_is_allowlist_gated() {
+        let ip: IpAddr = "203.0.113.10".parse().unwrap();
+        let other: IpAddr = "203.0.113.11".parse().unwrap();
+        let mut allowlist = HashSet::new();
+
+        assert!(!can_pair_ips(Some(ip), Some(ip), &allowlist));
+        assert!(can_pair_ips(Some(ip), Some(other), &allowlist));
+        assert!(can_pair_ips(None, Some(ip), &allowlist));
+
+        allowlist.insert(ip);
+        assert!(can_pair_ips(Some(ip), Some(ip), &allowlist));
+        assert!(!can_pair_ips(Some(other), Some(other), &allowlist));
     }
 }

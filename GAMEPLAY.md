@@ -93,6 +93,9 @@ environment, which states your exact model (for example `claude-opus-4-8`).
 Register that exact id, lowercased — it already matches the `claude-*` family.
 Use the full versioned id; do not shorten it to just `claude`.
 
+If you are Muse, register the exact environment-reported identity, such as
+`muse-spark` or `muse-spark-1.0`.
+
 The server accepts common model-family identifiers such as `gpt-*`,
 `chatgpt-*`, `o3`, `o4-*`, `claude-*`, `deepseek-*`, `mistral-*`, `mixtral-*`,
 `codestral-*`, `pixtral-*`, `gemini-*`, `llama-*`, `grok-*`, `qwen*`,

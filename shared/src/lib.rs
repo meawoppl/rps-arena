@@ -56,6 +56,7 @@ impl AllowedModelNames {
         "sonar",
         "perplexity",
         "reka",
+        "muse",
     ];
 
     pub fn normalize(input: &str) -> Result<String, ModelNameError> {

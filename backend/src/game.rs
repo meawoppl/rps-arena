@@ -85,10 +85,14 @@ fn same_ip_match_allowlist_from_env() -> HashSet<IpAddr> {
 fn can_pair_ips(
     waiting_ip: Option<IpAddr>,
     joining_ip: Option<IpAddr>,
+    waiting_model: &str,
+    joining_model: &str,
     same_ip_allowlist: &HashSet<IpAddr>,
 ) -> bool {
     match (waiting_ip, joining_ip) {
-        (Some(a), Some(b)) => a != b || same_ip_allowlist.contains(&a),
+        (Some(a), Some(b)) => {
+            a != b || (waiting_model != joining_model && same_ip_allowlist.contains(&a))
+        }
         _ => true,
     }
 }
@@ -198,9 +202,15 @@ impl Matchmaker {
         // Anti self-play remains fail-closed for known, equal IPs unless an
         // operator explicitly permits that address. Unknown IPs retain the
         // existing fallback behavior.
-        let opp_idx = dq
-            .iter()
-            .position(|(opp_ip, _)| can_pair_ips(*opp_ip, ip, &self.same_ip_allowlist));
+        let opp_idx = dq.iter().position(|(opp_ip, opponent)| {
+            can_pair_ips(
+                *opp_ip,
+                ip,
+                &opponent.model,
+                &player.model,
+                &self.same_ip_allowlist,
+            )
+        });
         if let Some(i) = opp_idx {
             let (opp_ip, opponent) = dq.remove(i).expect("index came from position()");
             drop(dq);
@@ -885,12 +895,49 @@ mod tests {
         let other: IpAddr = "203.0.113.11".parse().unwrap();
         let mut allowlist = HashSet::new();
 
-        assert!(!can_pair_ips(Some(ip), Some(ip), &allowlist));
-        assert!(can_pair_ips(Some(ip), Some(other), &allowlist));
-        assert!(can_pair_ips(None, Some(ip), &allowlist));
+        assert!(!can_pair_ips(
+            Some(ip),
+            Some(ip),
+            "codex-5-6-sol",
+            "claude-fable-5",
+            &allowlist
+        ));
+        assert!(can_pair_ips(
+            Some(ip),
+            Some(other),
+            "codex-5-6-sol",
+            "codex-5-6-sol",
+            &allowlist
+        ));
+        assert!(can_pair_ips(
+            None,
+            Some(ip),
+            "codex-5-6-sol",
+            "codex-5-6-sol",
+            &allowlist
+        ));
 
         allowlist.insert(ip);
-        assert!(can_pair_ips(Some(ip), Some(ip), &allowlist));
-        assert!(!can_pair_ips(Some(other), Some(other), &allowlist));
+        assert!(can_pair_ips(
+            Some(ip),
+            Some(ip),
+            "codex-5-6-sol",
+            "claude-fable-5",
+            &allowlist
+        ));
+        assert!(!can_pair_ips(
+            Some(ip),
+            Some(ip),
+            "codex-5-6-sol",
+            "codex-5-6-sol",
+            &allowlist
+        ));
+        assert!(!can_pair_ips(
+            Some(other),
+            Some(other),
+            "codex-5-6-sol",
+            "claude-fable-5",
+            &allowlist
+        ));
     }
 }

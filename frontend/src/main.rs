@@ -1,4 +1,8 @@
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use gloo_net::http::Request;
 use gloo_timers::callback::Interval;
@@ -57,22 +61,74 @@ fn dashboard() -> Html {
     let leaderboard = use_state(|| None::<Result<Vec<LeaderboardRow>, String>>);
     let matches = use_state(|| None::<Result<Vec<MatchSummary>, String>>);
     let sort_key = use_state(|| SortKey::Elo);
+    let lb_flash = use_state(HashMap::<String, RowFlash>::new);
+    let match_flash = use_state(HashSet::<String>::new);
+    // Alternates every refresh so identical flash classes still retrigger CSS animations.
+    let parity = use_state(|| false);
 
     {
         let leaderboard = leaderboard.clone();
-        use_effect_with((), move |_| {
-            spawn_local(async move {
-                leaderboard.set(Some(fetch_json("/api/leaderboard").await));
-            });
-        });
-    }
-
-    {
         let matches = matches.clone();
+        let lb_flash = lb_flash.clone();
+        let match_flash = match_flash.clone();
+        let parity = parity.clone();
         use_effect_with((), move |_| {
-            spawn_local(async move {
-                matches.set(Some(fetch_json("/api/matches?limit=25").await));
-            });
+            let refresh = move || {
+                {
+                    let leaderboard = leaderboard.clone();
+                    let lb_flash = lb_flash.clone();
+                    let parity = parity.clone();
+                    spawn_local(async move {
+                        let fresh = fetch_json::<Vec<LeaderboardRow>>("/api/leaderboard").await;
+                        if let (Ok(rows), Some(Ok(prev))) = (&fresh, &*leaderboard) {
+                            let by_model: HashMap<&str, &LeaderboardRow> =
+                                prev.iter().map(|r| (r.model.as_str(), r)).collect();
+                            let mut flags = HashMap::new();
+                            for row in rows {
+                                let flash = match by_model.get(row.model.as_str()) {
+                                    Some(p) => RowFlash {
+                                        elo: dir(row.elo, p.elo),
+                                        matches: dir(row.matches as f64, p.matches as f64),
+                                        match_win: dir(row.match_win_rate, p.match_win_rate),
+                                        round_win: dir(row.round_win_rate, p.round_win_rate),
+                                    },
+                                    None => RowFlash {
+                                        elo: 1,
+                                        matches: 1,
+                                        match_win: 0,
+                                        round_win: 0,
+                                    },
+                                };
+                                flags.insert(row.model.clone(), flash);
+                            }
+                            lb_flash.set(flags);
+                            parity.set(!*parity);
+                        }
+                        leaderboard.set(Some(fresh));
+                    });
+                }
+                {
+                    let matches = matches.clone();
+                    let match_flash = match_flash.clone();
+                    spawn_local(async move {
+                        let fresh = fetch_json::<Vec<MatchSummary>>("/api/matches?limit=25").await;
+                        if let (Ok(rows), Some(Ok(prev))) = (&fresh, &*matches) {
+                            let seen: HashSet<String> =
+                                prev.iter().map(|m| m.match_id.to_string()).collect();
+                            match_flash.set(
+                                rows.iter()
+                                    .map(|m| m.match_id.to_string())
+                                    .filter(|id| !seen.contains(id))
+                                    .collect(),
+                            );
+                        }
+                        matches.set(Some(fresh));
+                    });
+                }
+            };
+            refresh();
+            let interval = Interval::new(10_000, refresh);
+            move || drop(interval)
         });
     }
 
@@ -115,7 +171,7 @@ fn dashboard() -> Html {
 
             <section class="section">
                 <div class="section-heading">
-                    <h2>{ "Leaderboard" }</h2>
+                    <h2>{ "Leaderboard" }<span class="live-badge"><span class="live-dot"></span>{ "live" }</span></h2>
                     <div class="segmented" aria-label="Leaderboard sort">
                         { sort_button("Elo", SortKey::Elo, *sort_key, sort_key.clone()) }
                         { sort_button("Model", SortKey::Model, *sort_key, sort_key.clone()) }
@@ -124,14 +180,14 @@ fn dashboard() -> Html {
                         { sort_button("Round win", SortKey::RoundWinRate, *sort_key, sort_key.clone()) }
                     </div>
                 </div>
-                { render_leaderboard(&leaderboard, *sort_key) }
+                { render_leaderboard(&leaderboard, *sort_key, &lb_flash, *parity) }
             </section>
 
             <section class="section">
                 <div class="section-heading">
                     <h2>{ "Recent Matches" }</h2>
                 </div>
-                { render_match_list(&matches) }
+                { render_match_list(&matches, &match_flash, *parity) }
             </section>
 
             <footer class="agent-footer" aria-label="Agent play directions">
@@ -388,6 +444,35 @@ where
         .map_err(|err| format!("invalid response: {err}"))
 }
 
+/// Per-cell change direction for one leaderboard row: 1 = up, -1 = down, 0 = unchanged.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct RowFlash {
+    elo: i8,
+    matches: i8,
+    match_win: i8,
+    round_win: i8,
+}
+
+fn dir(now: f64, before: f64) -> i8 {
+    if now > before {
+        1
+    } else if now < before {
+        -1
+    } else {
+        0
+    }
+}
+
+fn flash_class(direction: i8, parity: bool) -> &'static str {
+    match (direction, parity) {
+        (1, false) => "flash-up-a",
+        (1, true) => "flash-up-b",
+        (-1, false) => "flash-down-a",
+        (-1, true) => "flash-down-b",
+        _ => "",
+    }
+}
+
 fn sort_button(
     label: &'static str,
     key: SortKey,
@@ -405,6 +490,8 @@ fn sort_button(
 fn render_leaderboard(
     state: &UseStateHandle<Option<Result<Vec<LeaderboardRow>, String>>>,
     sort_key: SortKey,
+    flash: &HashMap<String, RowFlash>,
+    parity: bool,
 ) -> Html {
     match &**state {
         None => html! { <div class="status">{"Loading leaderboard..."}</div> },
@@ -432,7 +519,10 @@ fn render_leaderboard(
                             </tr>
                         </thead>
                         <tbody>
-                            { for rows.iter().map(render_leaderboard_row) }
+                            { for rows.iter().map(|row| {
+                                let f = flash.get(&row.model).copied().unwrap_or_default();
+                                render_leaderboard_row(row, f, parity)
+                            }) }
                         </tbody>
                     </table>
                 </div>
@@ -441,23 +531,27 @@ fn render_leaderboard(
     }
 }
 
-fn render_leaderboard_row(row: &LeaderboardRow) -> Html {
+fn render_leaderboard_row(row: &LeaderboardRow, flash: RowFlash, parity: bool) -> Html {
     html! {
         <tr>
             <td class="model">{ &row.model }</td>
-            <td>{ format!("{:.0}", row.elo) }</td>
-            <td>{ row.matches }</td>
+            <td class={flash_class(flash.elo, parity)}>{ format!("{:.0}", row.elo) }</td>
+            <td class={flash_class(flash.matches, parity)}>{ row.matches }</td>
             <td>{ format!("{}-{}-{}", row.match_wins, row.match_losses, row.match_draws) }</td>
-            <td>{ percent(row.match_win_rate) }</td>
+            <td class={flash_class(flash.match_win, parity)}>{ percent(row.match_win_rate) }</td>
             <td>{ row.rounds }</td>
             <td>{ format!("{}-{}-{}", row.round_wins, row.round_losses, row.round_ties) }</td>
-            <td>{ percent(row.round_win_rate) }</td>
+            <td class={flash_class(flash.round_win, parity)}>{ percent(row.round_win_rate) }</td>
             <td>{ render_throw_dist(row.throw_dist) }</td>
         </tr>
     }
 }
 
-fn render_match_list(state: &UseStateHandle<Option<Result<Vec<MatchSummary>, String>>>) -> Html {
+fn render_match_list(
+    state: &UseStateHandle<Option<Result<Vec<MatchSummary>, String>>>,
+    flash: &HashSet<String>,
+    parity: bool,
+) -> Html {
     match &**state {
         None => html! { <div class="status">{"Loading matches..."}</div> },
         Some(Err(err)) => html! { <div class="status error">{ err }</div> },
@@ -466,15 +560,23 @@ fn render_match_list(state: &UseStateHandle<Option<Result<Vec<MatchSummary>, Str
         }
         Some(Ok(matches)) => html! {
             <div class="match-list">
-                { for matches.iter().map(render_match_summary) }
+                { for matches.iter().map(|m| {
+                    let is_new = flash.contains(&m.match_id.to_string());
+                    render_match_summary(m, is_new, parity)
+                }) }
             </div>
         },
     }
 }
 
-fn render_match_summary(summary: &MatchSummary) -> Html {
+fn render_match_summary(summary: &MatchSummary, is_new: bool, parity: bool) -> Html {
+    let classes = match (is_new, parity) {
+        (true, false) => "match-row match-new-a",
+        (true, true) => "match-row match-new-b",
+        (false, _) => "match-row",
+    };
     html! {
-        <Link<Route> to={Route::Match { id: summary.match_id.to_string() }} classes="match-row">
+        <Link<Route> to={Route::Match { id: summary.match_id.to_string() }} classes={classes}>
             <div>
                 <span class="model">{ &summary.model_a }</span>
                 <span class="score">{ summary.score_a }</span>

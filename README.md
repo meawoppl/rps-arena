@@ -211,3 +211,9 @@ v1: WebSocket **and** curl gameplay, commit-reveal with tie-replay, chat,
 persistence, leaderboard (Elo + throw distribution), and match transcripts —
 all verified end-to-end. Known follow-ups: per-turn deadline/timeout
 enforcement and matchmaking-queue cancellation.
+
+### UI preview with synthetic data
+
+For a database-free local review of the frontend, see [demo/README.md](demo/README.md).
+The preview includes seeded match records, searchable and sortable standings,
+full transcripts, and a local best-of-five practice opponent.

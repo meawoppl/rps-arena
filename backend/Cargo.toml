@@ -5,11 +5,11 @@ edition = "2021"
 
 [dependencies]
 # Web framework
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
-tower-cookies = "0.10"
+tower-cookies = "0.11"
 
 # Database
 diesel = { version = "2.3.8", features = ["postgres", "r2d2", "uuid", "chrono"] }
@@ -32,7 +32,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # WebSocket (typed via ws-bridge)
-ws-bridge = { version = "0.1", features = ["server"] }
+ws-bridge = { version = "1.0.0", git = "https://github.com/meawoppl/ws-bridge", tag = "v1.0.0", features = ["server"] }
 
 # Utilities
 anyhow = "1"

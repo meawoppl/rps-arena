@@ -1,7 +1,6 @@
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
 use axum::{
-    async_trait,
     extract::{ConnectInfo, FromRequestParts, Request},
     http::{request::Parts, HeaderMap, StatusCode},
     middleware::Next,
@@ -15,7 +14,6 @@ use axum::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ClientIp(pub IpAddr);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for ClientIp
 where
     S: Send + Sync,

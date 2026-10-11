@@ -9,4 +9,4 @@ clap = { version = "4", features = ["derive"] }
 shared = { path = "../shared" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
-ws-bridge = { version = "0.1", features = ["native-client"] }
+ws-bridge = { version = "1.0.0", git = "https://github.com/meawoppl/ws-bridge", tag = "v1.0.0", features = ["native-client"] }
